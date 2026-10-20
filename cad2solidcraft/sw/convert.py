@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import step_fix
+from . import ir as ir_mod
 from ..solidcraft import script as sc
 from ..solidcraft.transform import Matrix, axis_angle, transpose
 from .assembly import Assembly, Instance, read_assembly
@@ -41,6 +42,8 @@ class PartResult:
     bodies: int | None = None
     faces_fixed: int = 0
     circle_edges_fixed: int = 0
+    source_volume_mm3: float | None = None  # SolidWorks' own display mesh
+    matches_source: bool | None = None
     seconds: float = 0.0
     warnings: list[str] = field(default_factory=list)
 
@@ -56,7 +59,11 @@ class Report:
     seconds: float = 0.0
 
     def ok(self) -> bool:
-        return self.output is not None and all(p.ok for p in self.parts) and self.placed == self.instances
+        return (
+            self.output is not None
+            and all(p.ok and p.matches_source is not False for p in self.parts)
+            and self.placed == self.instances
+        )
 
 
 def find_cadmpeg(explicit: str | None = None) -> Path:
@@ -130,6 +137,38 @@ def name_step_product(step: Path, name: str) -> None:
     step.write_text(text, encoding="latin-1")
 
 
+VOLUME_TOLERANCE = 0.005  # relative
+BOX_TOLERANCE = 0.1  # mm
+
+
+def _check_against_source(src: Path, build: Path, cadmpeg: Path, measured: dict, res: PartResult, up_y: bool) -> None:
+    """Compare the converted part with SolidWorks' own display mesh of it."""
+    try:
+        truth = ir_mod.load(src, cadmpeg, cache=build / "ir" / f"{src.stem}.json").mesh()
+    except Exception as e:
+        res.warnings.append(f"no se ha podido comparar con SolidWorks: {e}")
+        return
+    if not truth.triangles:
+        return
+    if up_y:
+        truth = truth.transformed(Y_UP_TO_Z_UP)
+    res.source_volume_mm3 = truth.volume()
+    boxes = [b.get("bbox") for b in measured.get("bodies") or [] if b.get("bbox")]
+    if not boxes or res.volume_mm3 is None:
+        return
+    lo, hi = truth.bbox()
+    blo = [min(b["min"][k] for b in boxes) for k in range(3)]
+    bhi = [max(b["max"][k] for b in boxes) for k in range(3)]
+    box_err = max(max(abs(blo[k] - lo[k]), abs(bhi[k] - hi[k])) for k in range(3))
+    vol_err = abs(res.volume_mm3 - res.source_volume_mm3) / max(abs(res.source_volume_mm3), 1e-9)
+    res.matches_source = vol_err <= VOLUME_TOLERANCE and box_err <= BOX_TOLERANCE
+    if not res.matches_source:
+        res.warnings.append(
+            f"no coincide con SolidWorks: volumen {res.volume_mm3 / 1000:.1f} cm³ frente a "
+            f"{res.source_volume_mm3 / 1000:.1f} cm³, caja desviada {box_err:.2f} mm"
+        )
+
+
 def convert_part(src: Path, stem: str, out: Path, cli: Path, cadmpeg: Path, log: Log, up_y: bool = True) -> PartResult:
     t0 = time.monotonic()
     res = PartResult(stem=stem, source=str(src))
@@ -163,6 +202,7 @@ def convert_part(src: Path, stem: str, out: Path, cli: Path, cadmpeg: Path, log:
         for body in measured.get("bodies", []):
             if (body.get("volume_mm3") or 0) < 0:
                 res.warnings.append(f"el sólido {body.get('name')} está del revés (volumen negativo)")
+        _check_against_source(src, build, cadmpeg, measured, res, up_y)
     except Exception as e:  # one bad part must not stop the assembly
         res.warnings.append(str(e))
     res.seconds = round(time.monotonic() - t0, 1)
