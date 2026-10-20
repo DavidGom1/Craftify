@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+/out/
+/spikes/
+# Source CAD files are company data: never commit them.
+*.SLDPRT
+*.SLDASM
+*.sldprt
+*.sldasm
+*.f3d
+*.f3z
