@@ -87,7 +87,7 @@ def resolve_reference(asm: Assembly, stem: str, search: list[Path]) -> Path | No
 
 def _run_cadmpeg(cadmpeg: Path, src: Path, step: Path) -> list[str]:
     proc = subprocess.run(
-        [str(cadmpeg), "convert", str(src), "-o", str(step)],
+        [str(cadmpeg), "convert", str(src), "-o", str(step), "--force"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
     )
     notes = [ln for ln in (proc.stdout + proc.stderr).splitlines() if ln.strip()]
@@ -145,7 +145,7 @@ def convert_part(src: Path, stem: str, out: Path, cli: Path, cadmpeg: Path, log:
         res.faces_fixed = fix.flipped
         res.circle_edges_fixed = fix.circle_edges
         if fix.unknown:
-            res.warnings.append(f"{fix.unknown} of {fix.faces} faces keep an unverified orientation")
+            res.warnings.append(f"{fix.unknown} de {fix.faces} caras con orientación sin verificar")
         res.step = str(step)
         s = sc.Script()
         s.add("file.new", name=stem)
@@ -159,10 +159,10 @@ def convert_part(src: Path, stem: str, out: Path, cli: Path, cadmpeg: Path, log:
         res.volume_mm3 = (measured.get("total") or {}).get("volume_mm3")
         res.ok = bool(res.bodies)
         if not res.ok:
-            res.warnings.append("the converted part has no bodies")
+            res.warnings.append("la pieza convertida no tiene sólidos")
         for body in measured.get("bodies", []):
             if (body.get("volume_mm3") or 0) < 0:
-                res.warnings.append(f"body {body.get('name')} is inside out (negative volume)")
+                res.warnings.append(f"el sólido {body.get('name')} está del revés (volumen negativo)")
     except Exception as e:  # one bad part must not stop the assembly
         res.warnings.append(str(e))
     res.seconds = round(time.monotonic() - t0, 1)
@@ -234,8 +234,12 @@ def assembly_script(asm: Assembly, part_designs: dict[str, Path], out_design: Pa
     return s, placed, mapping
 
 
+PREVIEW_SOURCE = "preview_solidworks.png"
+PREVIEW_RESULT = "preview_solidcraft.png"
+
+
 def convert_assembly(src: Path, out_root: Path, up_y: bool = True, cli: str | None = None,
-                     cadmpeg: str | None = None, log: Log = print) -> Report:
+                     cadmpeg: str | None = None, log: Log = print, picture: bool = True) -> Report:
     t0 = time.monotonic()
     cli_path = sc.find_cli(cli)
     cad_path = find_cadmpeg(cadmpeg)
@@ -243,18 +247,18 @@ def convert_assembly(src: Path, out_root: Path, up_y: bool = True, cli: str | No
     out = out_root / asm.name
     out.mkdir(parents=True, exist_ok=True)
     report = Report(source=str(src), instances=len(asm.instances), warnings=list(asm.warnings))
-    log(f"{asm.name}: {len(asm.instances)} instances")
+    log(f"{asm.name}: {len(asm.instances)} instancias")
 
     part_designs: dict[str, Path] = {}
     for stem in dict.fromkeys(i.stem for i in asm.instances):
         ref = resolve_reference(asm, stem, [src.parent])
         if ref is None:
-            report.parts.append(PartResult(stem=stem, source=None, warnings=["file not found"]))
-            log(f"  ERR {stem}: file not found")
+            report.parts.append(PartResult(stem=stem, source=None, warnings=["no se encuentra el fichero"]))
+            log(f"  ERR {stem}: no se encuentra el fichero")
             continue
         if ref.suffix.lower() == ".sldasm":
-            report.parts.append(PartResult(stem=stem, source=str(ref), warnings=["sub-assemblies are not converted yet"]))
-            log(f"  ERR {stem}: sub-assemblies are not converted yet")
+            report.parts.append(PartResult(stem=stem, source=str(ref), warnings=["los subensamblajes aún no se convierten"]))
+            log(f"  ERR {stem}: los subensamblajes aún no se convierten")
             continue
         r = convert_part(ref, stem, out, cli_path, cad_path, log, up_y)
         report.parts.append(r)
@@ -268,11 +272,17 @@ def convert_assembly(src: Path, out_root: Path, up_y: bool = True, cli: str | No
         report.output = str(design)
         report.placed = placed
     except Exception as e:
-        report.warnings.append(f"assembly: {e}")
-    _save_preview(src, out / "preview_solidworks.png")
+        report.warnings.append(f"ensamblaje: {e}")
+    _save_preview(src, out / PREVIEW_SOURCE)
+    if picture and report.output:
+        log("Dibujando una imagen del resultado…")
+        try:
+            sc.snapshot(cli_path, design, out / PREVIEW_RESULT, view="iso", width=800, height=600)
+        except Exception as e:
+            report.warnings.append(f"imagen: {e}")
     report.seconds = round(time.monotonic() - t0, 1)
     (out / "report.json").write_text(json.dumps(asdict(report), indent=1, ensure_ascii=False), encoding="utf-8")
-    log(f"{'Done' if report.ok() else 'Done with problems'}: {report.output} ({report.seconds} s)")
+    log(f"{'Terminado' if report.ok() else 'Terminado con avisos'}: {report.output} ({report.seconds} s)")
     return report
 
 
