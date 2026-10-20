@@ -88,7 +88,7 @@ def resolve_reference(asm: Assembly, stem: str, search: list[Path]) -> Path | No
 def _run_cadmpeg(cadmpeg: Path, src: Path, step: Path) -> list[str]:
     proc = subprocess.run(
         [str(cadmpeg), "convert", str(src), "-o", str(step), "--force"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, creationflags=sc.NO_WINDOW,
     )
     notes = [ln for ln in (proc.stdout + proc.stderr).splitlines() if ln.strip()]
     if proc.returncode != 0 or not step.is_file():

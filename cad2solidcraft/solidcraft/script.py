@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 METADATA_KEY = "com.hidroconta.cad2solidcraft"
+# Child programs run without a console window of their own (the window app has none either,
+# so Windows would open one for every solidcraft-cli and cadmpeg call).
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class SolidCraftError(RuntimeError):
@@ -55,6 +58,7 @@ def run(cli: Path, script_path: Path, timeout: float = 1800) -> list[Any]:
         encoding="utf-8",
         errors="replace",
         timeout=timeout,
+        creationflags=NO_WINDOW,
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip().splitlines()
@@ -70,7 +74,7 @@ def evaluate(cli: Path, design: Path, timeout: float = 600) -> dict[str, Any]:
     out = design.with_suffix(".eval.json")
     proc = subprocess.run(
         [str(cli), "eval", str(design), "--json-out", str(out)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW,
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip().splitlines()
@@ -82,7 +86,7 @@ def snapshot(cli: Path, design: Path, png: Path, view: str = "iso", width: int =
     proc = subprocess.run(
         [str(cli), "snapshot", "--in", str(design), "--out", str(png), "--view", view,
          "--width", str(width), "--height", str(height), "--no-grid"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600, creationflags=NO_WINDOW,
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip().splitlines()
