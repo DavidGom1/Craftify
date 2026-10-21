@@ -1,0 +1,79 @@
+# Builds Craftify for Windows and publishes it as a GitHub release.
+#
+# Push a tag such as v0.2.0 (the version in Cargo.toml) and this builds the patched cadmpeg and
+# Craftify on Windows, makes the installer (Craftify-<version>-setup.exe) and the portable zip
+# (Craftify-<version>-windows-x64.zip) and attaches both to a release named after the tag. Run by
+# hand (Actions > Release > Run workflow) it only builds them and keeps them as a workflow
+# artifact, to try a build without releasing it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Cache cargo and the cadmpeg build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            packaging/cadmpeg/target
+          key: windows-${{ hashFiles('Cargo.lock', 'packaging/cadmpeg/build.ps1', 'packaging/cadmpeg/*.patch') }}
+
+      - name: Version matches the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Cargo.toml says $version but the tag is ${{ github.ref_name }}" }
+
+      - name: Patched cadmpeg
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File packaging\cadmpeg\build.ps1
+
+      - name: Tests
+        run: cargo test --release --locked
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Package
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File package.ps1
+
+      - name: Keep the downloads
+        uses: actions/upload-artifact@v4
+        with:
+          name: Craftify-windows-x64
+          path: |
+            dist/Craftify-*-setup.exe
+            dist/Craftify-*-windows-x64.zip
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Craftify-*-setup.exe
+            dist/Craftify-*-windows-x64.zip
+          body_path: .github/release-notes.md
+          generate_release_notes: true
