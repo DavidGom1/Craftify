@@ -70,9 +70,10 @@ impl Mesh {
             return; // degenerate
         }
         if let Some(o) = outward
-            && dot(g, o) < 0.0 {
-                std::mem::swap(&mut b, &mut c);
-            }
+            && dot(g, o) < 0.0
+        {
+            std::mem::swap(&mut b, &mut c);
+        }
         self.triangles.push([a, b, c]);
         self.grid = OnceLock::new();
     }

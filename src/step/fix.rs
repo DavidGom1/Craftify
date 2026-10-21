@@ -54,8 +54,7 @@ fn loop_segments(st: &Step, loop_id: i64, bound_sense: bool) -> Result<Option<Ve
         let v2 = st.vertex(ec.a(2)?.r()?)?;
         let forward = ec.a(4)?.is(".T.");
         let curve = ec.a(3)?.r()?;
-        let Some(mut pts) = st.curve_samples(curve, if forward { v1 } else { v2 }, if forward { v2 } else { v1 }, closed)?
-        else {
+        let Some(mut pts) = st.curve_samples(curve, if forward { v1 } else { v2 }, if forward { v2 } else { v1 }, closed)? else {
             return Ok(None);
         };
         if !forward {

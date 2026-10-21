@@ -22,7 +22,7 @@ New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item target\release\craftify.exe (Join-Path $dist "Craftify.exe")
 Copy-Item target\release\craftify-cli.exe $dist
 Copy-Item $cadmpeg $dist
-Copy-Item NOTICE.md, assets\fonts\OFL-IBMPlex.txt, packaging\README.txt $dist
+Copy-Item NOTICE.md, LICENSE-MIT, LICENSE-APACHE, assets\fonts\OFL-IBMPlex.txt, packaging\README.txt $dist
 
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
 $zip = Join-Path $PSScriptRoot "dist\Craftify-$version-windows-x64.zip"

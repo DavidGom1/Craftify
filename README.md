@@ -117,3 +117,13 @@ the order of `src/pyset.rs` against CPython.
 - The timeline (editable features): the Python version had an unconnected translator; cadmpeg
   0.6 decodes too little of SolidWorks sketches.
 - Subassemblies, mates, and configurations other than the active one.
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md)
+(in English and Spanish).
+
+## License
+
+Craftify is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+option. Third-party code and fonts it uses are listed in [NOTICE.md](NOTICE.md).

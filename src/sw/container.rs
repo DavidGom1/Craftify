@@ -103,13 +103,7 @@ pub fn read_blocks(data: &[u8]) -> Vec<Block> {
             Some(c) if !c.is_empty() => c.len(),
             _ => raw,
         };
-        blocks.push(Block {
-            name: String::from_utf8_lossy(&name).into_owned(),
-            offset: i,
-            comp_size: used,
-            raw_size,
-            data: content,
-        });
+        blocks.push(Block { name: String::from_utf8_lossy(&name).into_owned(), offset: i, comp_size: used, raw_size, data: content });
         pos = payload_start + used;
     }
     blocks

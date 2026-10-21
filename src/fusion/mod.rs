@@ -158,19 +158,20 @@ fn convert_component(c: &Value, job: &Path, out: &Path, stem: &str, cli: &Path, 
         let truth_box = turned_box(c.get("bbox_mm"), turn.then_some(&Y_UP_TO_Z_UP));
         let got = Measured(&measured).bbox()?;
         if let (Some(volume), Some(source), Some((lo, hi)), Some((blo, bhi))) = (res.volume_mm3, res.source_volume_mm3, truth_box, got)
-            && source != 0.0 {
-                let box_err = (0..3).map(|k| (blo[k] - lo[k]).abs().max((bhi[k] - hi[k]).abs())).fold(f64::NEG_INFINITY, f64::max);
-                let vol_err = (volume - source).abs() / source.abs().max(1e-9);
-                let matches = vol_err <= VOLUME_TOLERANCE && box_err <= BOX_TOLERANCE;
-                res.matches_source = Some(matches);
-                if !matches {
-                    res.warnings.push(format!(
-                        "no coincide con Fusion: volumen {:.2} cm³ frente a {:.2} cm³, caja desviada {box_err:.2} mm",
-                        volume / 1000.0,
-                        source / 1000.0
-                    ));
-                }
+            && source != 0.0
+        {
+            let box_err = (0..3).map(|k| (blo[k] - lo[k]).abs().max((bhi[k] - hi[k]).abs())).fold(f64::NEG_INFINITY, f64::max);
+            let vol_err = (volume - source).abs() / source.abs().max(1e-9);
+            let matches = vol_err <= VOLUME_TOLERANCE && box_err <= BOX_TOLERANCE;
+            res.matches_source = Some(matches);
+            if !matches {
+                res.warnings.push(format!(
+                    "no coincide con Fusion: volumen {:.2} cm³ frente a {:.2} cm³, caja desviada {box_err:.2} mm",
+                    volume / 1000.0,
+                    source / 1000.0
+                ));
             }
+        }
         if !res.ok {
             res.warnings.push("la pieza convertida no tiene sólidos".into());
         }
@@ -212,13 +213,8 @@ pub fn convert_fusion(src: &Path, out_root: &Path, up_y: bool, cli: &Path, pictu
     let (data, job) = bridge::export(src, &|l| hooks.log(l))?;
     let turn = up_y && data.get("up").and_then(Value::as_str).unwrap_or("y") == "y";
     let empty = Vec::new();
-    let comps: Vec<&Value> = data
-        .get("components")
-        .and_then(Value::as_array)
-        .unwrap_or(&empty)
-        .iter()
-        .filter(|c| c.get("step").is_some_and(truthy))
-        .collect();
+    let comps: Vec<&Value> =
+        data.get("components").and_then(Value::as_array).unwrap_or(&empty).iter().filter(|c| c.get("step").is_some_and(truthy)).collect();
     let mut used = HashSet::new();
     let mut stems: IndexMap<String, String> = IndexMap::new();
     for c in &comps {
@@ -231,9 +227,10 @@ pub fn convert_fusion(src: &Path, out_root: &Path, up_y: bool, cli: &Path, pictu
         let id = id_of(c);
         let r = convert_component(c, &job, &out, &stems[&id], cli, turn, src, &|l| hooks.log(l));
         if r.ok
-            && let Some(d) = &r.design {
-                designs.insert(id.clone(), PathBuf::from(d));
-            }
+            && let Some(d) = &r.design
+        {
+            designs.insert(id.clone(), PathBuf::from(d));
+        }
         hooks.tell(Stage::Part, n + 1, comps.len(), Some(&r));
         report.parts.push(r);
     }
@@ -241,7 +238,13 @@ pub fn convert_fusion(src: &Path, out_root: &Path, up_y: bool, cli: &Path, pictu
     let mut placements: Vec<Placement> = Vec::new();
     if let Some(root) = designs.get("root") {
         let label = data.get("name").and_then(Value::as_str).unwrap_or("root").to_owned();
-        placements.push(Placement { stem: stems["root"].clone(), design: root.clone(), rotation: IDENTITY, translation_mm: [0.0; 3], label });
+        placements.push(Placement {
+            stem: stems["root"].clone(),
+            design: root.clone(),
+            rotation: IDENTITY,
+            translation_mm: [0.0; 3],
+            label,
+        });
     }
     let occurrences = data.get("occurrences").and_then(Value::as_array).unwrap_or(&empty);
     for o in occurrences {

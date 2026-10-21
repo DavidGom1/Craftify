@@ -53,13 +53,8 @@ impl Document {
     fn new(key: &str, data: Vec<u8>) -> Result<Document> {
         let f = open_f3d(&data)?;
         let asm = read_assembly(&f)?;
-        let designs: Vec<Value> = f
-            .redirections
-            .as_ref()
-            .and_then(|r| r.get("designs"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let designs: Vec<Value> =
+            f.redirections.as_ref().and_then(|r| r.get("designs")).and_then(Value::as_array).cloned().unwrap_or_default();
         let mine: Vec<&Value> = designs.iter().filter(|d| d.get("targetFileName").and_then(Value::as_str) == Some(key)).collect();
         let mine = if mine.is_empty() { designs.iter().take(1).collect() } else { mine };
         let name = mine
@@ -85,7 +80,9 @@ fn load(src: &Path) -> Result<(String, Docs)> {
     let root_key = if util::suffix_lower(src) == ".f3z" {
         let mut z = zip::ZipArchive::new(std::fs::File::open(src)?)?;
         let mut manifest = String::new();
-        z.by_name("Manifest.json").map_err(|_| anyhow!("There is no item named 'Manifest.json' in the archive"))?.read_to_string(&mut manifest)?;
+        z.by_name("Manifest.json")
+            .map_err(|_| anyhow!("There is no item named 'Manifest.json' in the archive"))?
+            .read_to_string(&mut manifest)?;
         let root_name = serde_json::from_str::<Value>(&manifest)?.get("root").and_then(Value::as_str).map(str::to_owned);
         for i in 0..z.len() {
             let mut f = z.by_index(i)?;
@@ -117,10 +114,11 @@ fn load(src: &Path) -> Result<(String, Docs)> {
         let d = &docs[&k];
         let mut xrefs = HashMap::new();
         for (cid, c) in &d.asm.components {
-            if let Some(other) = by_root.get(&c.name) {
-                if Some(*cid) != d.asm.root && *other != d.key {
-                    xrefs.insert(*cid, other.clone());
-                }
+            if let Some(other) = by_root.get(&c.name)
+                && Some(*cid) != d.asm.root
+                && *other != d.key
+            {
+                xrefs.insert(*cid, other.clone());
             }
         }
         docs[&k].xrefs = xrefs;
@@ -238,7 +236,8 @@ fn assign(doc: &Document, step: &StepFile, wanted: &HashSet<u64>) -> Result<Hash
         return Ok(out);
     }
     // cadmpeg left some body out: each solid to the cached box that holds it best
-    let slots: Vec<(u64, super::f3d::Box3)> = order.iter().filter_map(|(_, _, cid, b)| b.filter(|_| wanted.contains(cid)).map(|b| (*cid, b))).collect();
+    let slots: Vec<(u64, super::f3d::Box3)> =
+        order.iter().filter_map(|(_, _, cid, b)| b.filter(|_| wanted.contains(cid)).map(|b| (*cid, b))).collect();
     let pmax = |a: f64, b: f64| if b > a { b } else { a };
     let mut pairs: Vec<(f64, i64, usize)> = Vec::new();
     for s in &items {
@@ -321,7 +320,17 @@ fn bounds(boxes: &[([f64; 3], [f64; 3])]) -> ([f64; 3], [f64; 3]) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn part(doc: &Document, cid: u64, solids: &[i64], step: &StepFile, stem: &str, out: &Path, cli: &Path, src: &Path, hooks: &Hooks) -> PartResult {
+fn part(
+    doc: &Document,
+    cid: u64,
+    solids: &[i64],
+    step: &StepFile,
+    stem: &str,
+    out: &Path,
+    cli: &Path,
+    src: &Path,
+    hooks: &Hooks,
+) -> PartResult {
     let t0 = Instant::now();
     let comp = &doc.asm.components[&cid];
     let mut res = PartResult::new(stem, Some(s(src)));
@@ -414,10 +423,10 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
         let r = match steps[key].as_ref() {
             Some(step) if !solids.is_empty() => {
                 let r = part(d, *cid, &solids, step, stem, &out, cli, src, hooks);
-                if r.ok {
-                    if let Some(des) = &r.design {
-                        designs.insert((key.clone(), *cid), PathBuf::from(des));
-                    }
+                if r.ok
+                    && let Some(des) = &r.design
+                {
+                    designs.insert((key.clone(), *cid), PathBuf::from(des));
                 }
                 r
             }
@@ -441,7 +450,13 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
         }
         if let Some(design) = designs.get(&key) {
             let m = [w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10]];
-            placements.push(Placement { stem: stems[&key].clone(), design: design.clone(), rotation: m, translation_mm: [w[3], w[7], w[11]], label: path.to_owned() });
+            placements.push(Placement {
+                stem: stems[&key].clone(),
+                design: design.clone(),
+                rotation: m,
+                translation_mm: [w[3], w[7], w[11]],
+                label: path.to_owned(),
+            });
         }
         Ok(())
     })?;

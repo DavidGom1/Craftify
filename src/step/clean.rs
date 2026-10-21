@@ -240,9 +240,9 @@ impl Curve {
 type Curves = HashMap<i64, Curve>;
 
 fn curve<'c>(st: &Edit, cid: i64, curves: &'c mut Curves) -> Result<&'c mut Curve> {
-    if !curves.contains_key(&cid) {
+    if let std::collections::hash_map::Entry::Vacant(e) = curves.entry(cid) {
         let c = Curve::new(st, cid)?;
-        curves.insert(cid, c);
+        e.insert(c);
     }
     curves.get_mut(&cid).ok_or_else(index_err)
 }
@@ -288,13 +288,7 @@ fn travel(st: &Edit, ec_id: i64, forward: bool, curves: &mut Curves) -> Result<O
     Ok(Some(if forward {
         Travel { edge: ec_id, forward: true, start: v1, params: ts, points: pts }
     } else {
-        Travel {
-            edge: ec_id,
-            forward: false,
-            start: v2,
-            params: ts.into_iter().rev().collect(),
-            points: pts.into_iter().rev().collect(),
-        }
+        Travel { edge: ec_id, forward: false, start: v2, params: ts.into_iter().rev().collect(), points: pts.into_iter().rev().collect() }
     }))
 }
 
@@ -669,10 +663,14 @@ fn trim(st: &mut Edit, ec_id: i64, curves: &mut Curves) -> Result<bool> {
     }
     let Kind::Spline { p, ctrl, w, u } = &c.kind else { return Ok(false) };
     let p = *p;
-    let pw: Vec<Hom> = ctrl.iter().zip(w).map(|(q, w)| {
-        let m = mul(*q, *w);
-        [m[0], m[1], m[2], *w]
-    }).collect();
+    let pw: Vec<Hom> = ctrl
+        .iter()
+        .zip(w)
+        .map(|(q, w)| {
+            let m = mul(*q, *w);
+            [m[0], m[1], m[2], *w]
+        })
+        .collect();
     let (knots, mut cp) = piece(p, u.clone(), pw, a, b)?;
     let (first, last) = if along { (p1, p2) } else { (p2, p1) };
     let w0 = cp.first().ok_or_else(index_err)?[3];
@@ -720,24 +718,25 @@ fn trim(st: &mut Edit, ec_id: i64, curves: &mut Curves) -> Result<bool> {
     };
     st.set(ec_id, vec![ec.a(0)?.clone(), ec.a(1)?.clone(), ec.a(2)?.clone(), r(new), ec.a(4)?.clone()])?;
     let old = st.st.get(cid).cloned();
-    if let Some(old) = old {
-        if (old.ty == "SURFACE_CURVE" || old.ty == "SEAM_CURVE") && st.users.get(&cid).is_none_or(|u| u.is_empty()) {
-            let pcurves: Vec<i64> = match old.a(2)? {
-                Arg::L(l) => l.iter().map(Arg::r).collect::<Result<_>>()?,
-                Arg::S(_) => Vec::new(),
+    if let Some(old) = old
+        && (old.ty == "SURFACE_CURVE" || old.ty == "SEAM_CURVE")
+        && st.users.get(&cid).is_none_or(|u| u.is_empty())
+    {
+        let pcurves: Vec<i64> = match old.a(2)? {
+            Arg::L(l) => l.iter().map(Arg::r).collect::<Result<_>>()?,
+            Arg::S(_) => Vec::new(),
+        };
+        st.drop(cid)?;
+        for pc in pcurves {
+            let rep = match st.st.get(pc) {
+                Some(e) => Some(e.a(2)?.r()?),
+                None => None,
             };
-            st.drop(cid)?;
-            for pc in pcurves {
-                let rep = match st.st.get(pc) {
-                    Some(e) => Some(e.a(2)?.r()?),
-                    None => None,
-                };
-                st.drop(pc)?;
-                if let Some(rep) = rep {
-                    if st.st.ent.contains_key(&rep) {
-                        st.drop(rep)?;
-                    }
-                }
+            st.drop(pc)?;
+            if let Some(rep) = rep
+                && st.st.ent.contains_key(&rep)
+            {
+                st.drop(rep)?;
             }
         }
     }
