@@ -16,6 +16,13 @@ the git history up to commit `e346a53`. This version does the same and gives the
 
 The window and the messages it shows are in Spanish, for the people who use it.
 
+## Download
+
+Get the latest Windows build from [Releases](https://github.com/DavidGom1/Craftify/releases):
+`Craftify-<version>-setup.exe` installs it for your user (no administrator rights);
+`Craftify-<version>-windows-x64.zip` is the same program, portable. Either way, install
+SolidCraft first (`winget install bherbruck.SolidCraft`).
+
 ## What it does
 
 - **SolidWorks** (`.SLDASM`, `.SLDPRT`): every part becomes its own design, with its exact
@@ -50,6 +57,7 @@ The window and the messages it shows are in Spanish, for the people who use it.
 |---|---|
 | Rust (rustup, stable) and VS 2022 Build Tools | building |
 | SolidCraft 0.16 or later | its `solidcraft-cli` builds the designs (`winget install bherbruck.SolidCraft`) |
+| Inno Setup 6 | the installer (`winget install JRSoftware.InnoSetup`) |
 | patched cadmpeg | `packaging/cadmpeg/bin/cadmpeg.exe`; rebuild it with `powershell -ExecutionPolicy Bypass -File packaging\cadmpeg\build.ps1` |
 
 ## Usage
@@ -62,7 +70,11 @@ cargo build --release
 - Command line: `target/release/craftify-cli.exe "C:/path/ASSEMBLY.SLDASM" --out "C:/path/output"`
   (`--up z` keeps SolidWorks parts as they are, `--no-picture` skips the picture of the result).
 - To hand it out: `package.ps1` puts `Craftify.exe`, `craftify-cli.exe` and `cadmpeg.exe` in
-  `dist/Craftify` (about 93 MB). The computers it runs on need only SolidCraft.
+  `dist/Craftify`, and builds the installer `dist/Craftify-<version>-setup.exe` (Inno Setup 6,
+  `packaging/installer.iss`) and the portable `dist/Craftify-<version>-windows-x64.zip`. The
+  computers it runs on need only SolidCraft.
+- To release: set the version in `Cargo.toml`, merge, and push a tag `v<version>`. The
+  `Release` workflow builds both downloads on Windows and publishes them as a GitHub release.
 
 The window keeps its choices in `%APPDATA%\cad2solidcraft\settings.json` and reads variables for
 automated checks: `CAD2SC_SOURCE`, `CAD2SC_OUT`, `CAD2SC_AUTOSTART`, `CAD2SC_DONE_FILE`, and
