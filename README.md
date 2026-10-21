@@ -1,6 +1,6 @@
-# cad2solidcraft
+# Craftify
 
-Convierte ensamblajes y piezas de CAD comerciales en diseños de [SolidCraft](https://github.com/tangency-labs/solidcraft).
+Craftify (paquete `cad2solidcraft`) convierte ensamblajes y piezas de CAD comerciales en diseños de [SolidCraft](https://github.com/tangency-labs/solidcraft).
 Empieza por SolidWorks; Fusion vendrá después.
 
 Herramienta interna de Hidroconta. **No forma parte de SolidCraft ni se envía a su repositorio**:
@@ -45,7 +45,7 @@ No hace falta tener SolidWorks instalado. Sin Flet, la ventana se abre en su ver
 
 ## Uso
 
-Con ventana: doble clic en **`Convertir a SolidCraft.pyw`**. Elige un ensamblaje o una pieza
+Con ventana: doble clic en **`Craftify.pyw`** (o en `Craftify.exe`, la versión empaquetada). Elige un ensamblaje o una pieza
 (su vista previa aparece al momento), la carpeta de salida, y pulsa **Convertir**. La tabla
 muestra cada pieza según termina, con su volumen frente al de SolidWorks; al seleccionar una
 pieza se ven sus avisos. Al terminar, **Abrir en SolidCraft** abre el resultado.

@@ -1,4 +1,4 @@
-"""Entry point of the packaged app (Convertir a SolidCraft.exe)."""
+"""Entry point of the packaged app (Craftify.exe)."""
 
 import multiprocessing
 

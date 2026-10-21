@@ -1,8 +1,8 @@
-"""Build "Convertir a SolidCraft.exe" and, with --shortcut, put a button for it on the desktop.
+"""Build "Craftify.exe" and, with --shortcut, put a button for it on the desktop.
 
     python packaging/build_exe.py [--shortcut]
 
-The result is dist/Convertir a SolidCraft/ (one folder with the .exe). It carries Python, the
+The result is dist/Craftify/ (one folder with the .exe). It carries Python, the
 window and cadmpeg, so the computers it runs on need only SolidCraft installed.
 Needs: pip install -r requirements.txt pyinstaller flet-desktop, and cadmpeg on this computer.
 """
@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-NAME = "Convertir a SolidCraft"
+NAME = "Craftify"
 
 
 def find_cadmpeg() -> Path:

@@ -1,6 +1,6 @@
 """Converter window built with Flet (Flutter, Material 3).
 
-Run with ``python -m cad2solidcraft.app`` or double-click ``Convertir a SolidCraft.pyw``.
+Run with ``python -m cad2solidcraft.app`` or double-click ``Craftify.pyw``.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from .sw.assembly import read_assembly
 from .converter import FUSION, SUPPORTED, convert, kind, preview_png
 from .sw.convert import PREVIEW_RESULT, PartResult, Report
 
-TITLE = "Convertir a SolidCraft"
+TITLE = "Craftify"
 
 
 def _icon() -> Path | None:

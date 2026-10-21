@@ -1,7 +1,7 @@
-"""Draw the app icon (packaging/icon.ico) with the standard library only.
+"""Draw the Craftify logo (packaging/icon.ico and icon.png) with the standard library only.
 
-A rounded indigo square with a white isometric cube, rendered with 4x4 supersampling and
-stored as PNG images inside one .ico (16 to 256 px).
+A flat charcoal rounded square with a white line-art isometric cube, rendered with 4x4
+supersampling and stored as PNG images inside one .ico (16 to 256 px).
 """
 
 from __future__ import annotations
@@ -11,8 +11,7 @@ import struct
 import zlib
 from pathlib import Path
 
-TOP = (92, 107, 192)  # indigo, lighter at the top
-BOTTOM = (48, 63, 159)
+INK = (28, 31, 38)
 WHITE = (255, 255, 255)
 
 
@@ -32,11 +31,11 @@ def _segment(px: float, py: float, a: tuple[float, float], b: tuple[float, float
 
 
 def _cube_lines() -> list[tuple[tuple[float, float], tuple[float, float]]]:
-    r = 0.42  # cube radius in units of the half-size
+    r = 0.5  # cube radius in units of the half-size
     v = [(r * math.cos(math.radians(90 + 60 * k)), -r * math.sin(math.radians(90 + 60 * k))) for k in range(6)]
     centre = (0.0, 0.0)
     lines = [(v[k], v[(k + 1) % 6]) for k in range(6)]
-    lines += [(centre, v[0]), (centre, v[2]), (centre, v[4])]  # the three inner edges
+    lines += [(centre, v[1]), (centre, v[3]), (centre, v[5])]  # the three inner edges
     return lines
 
 
@@ -44,7 +43,7 @@ def render(size: int) -> bytes:
     """RGBA pixels of the icon at `size` px."""
     ss = 4
     lines = _cube_lines()
-    stroke = 0.075 if size >= 32 else 0.11
+    stroke = 0.07 if size >= 48 else 0.09 if size >= 24 else 0.12  # thicker so small sizes stay legible
     out = bytearray()
     for j in range(size):
         for i in range(size):
@@ -53,19 +52,16 @@ def render(size: int) -> bytes:
                 for si in range(ss):
                     x = ((i + (si + 0.5) / ss) / size) * 2 - 1
                     y = ((j + (sj + 0.5) / ss) / size) * 2 - 1
-                    if _rounded_box(x, y, 0.94, 0.36) <= 0:
+                    if _rounded_box(x, y, 0.94, 0.28) <= 0:
                         bg += 1
                         if min(_segment(x, y, a, b) for a, b in lines) <= stroke / 2:
                             fg += 1
-            n = ss * ss
-            t = j / max(size - 1, 1)
-            base = tuple(round(TOP[k] * (1 - t) + BOTTOM[k] * t) for k in range(3))
             if bg == 0:
                 out += bytes((0, 0, 0, 0))
                 continue
             mix = fg / bg
-            rgb = tuple(round(base[k] * (1 - mix) + WHITE[k] * mix) for k in range(3))
-            out += bytes((*rgb, round(255 * bg / n)))
+            rgb = tuple(round(INK[k] * (1 - mix) + WHITE[k] * mix) for k in range(3))
+            out += bytes((*rgb, round(255 * bg / (ss * ss))))
     return bytes(out)
 
 
