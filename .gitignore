@@ -1,7 +1,6 @@
-__pycache__/
-*.pyc
+/target
+/dist
 /out/
-/spikes/
 # Source CAD files are company data: never commit them.
 *.SLDPRT
 *.SLDASM
@@ -9,8 +8,7 @@ __pycache__/
 *.sldasm
 *.f3d
 *.f3z
-/dist/
-/build/
+# cadmpeg built by packaging/cadmpeg/build.ps1
 /packaging/cadmpeg/bin/
 /packaging/cadmpeg/work/
 /packaging/cadmpeg/install/

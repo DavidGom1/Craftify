@@ -1,0 +1,51 @@
+[package]
+name = "craftify"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.95"
+description = "SolidWorks and Fusion designs to SolidCraft designs (Hidroconta internal tool)"
+publish = false
+authors = ["Hidroconta"]
+
+[lib]
+path = "src/lib.rs"
+
+# The window (no console) and the command line.
+[[bin]]
+name = "craftify"
+path = "src/bin/craftify.rs"
+
+[[bin]]
+name = "craftify-cli"
+path = "src/bin/craftify_cli.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+# preserve_order: scripts and reports keep the key order the Python converter wrote.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+indexmap = { version = "2", features = ["serde"] }
+regex = "1"
+flate2 = "1"
+# zstd: Fusion compresses some entries of its .f3d files with Zstandard (method 93).
+zip = { version = "9", default-features = false, features = ["deflate", "zstd"] }
+unicode-normalization = "0.1"
+unicode-general-category = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# The window: the same egui as SolidCraft 0.18, drawn with wgpu like SolidCraft.
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
+rfd = "0.17"
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+strip = "debuginfo"
+
+[profile.dev.package."*"]
+opt-level = 2
