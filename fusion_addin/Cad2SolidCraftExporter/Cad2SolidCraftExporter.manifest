@@ -1,0 +1,13 @@
+{
+	"autodeskProduct": "Fusion",
+	"type": "addin",
+	"id": "3f0b6f2e-7c1a-4f7e-9a51-2b8c6d4e9a10",
+	"author": "Hidroconta",
+	"description": {
+		"": "Exporta diseños de Fusion para convertirlos a SolidCraft (cad2solidcraft)"
+	},
+	"version": "0.1.0",
+	"runOnStartup": true,
+	"supportedOS": "windows",
+	"editEnabled": true
+}

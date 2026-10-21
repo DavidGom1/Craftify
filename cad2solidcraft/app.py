@@ -16,7 +16,8 @@ import flet as ft
 from . import settings as prefs
 from .settings import DEFAULT_OUT
 from .sw.assembly import read_assembly
-from .sw.convert import PREVIEW_RESULT, SUPPORTED, PartResult, Report, convert, preview_png
+from .converter import FUSION, SUPPORTED, convert, kind, preview_png
+from .sw.convert import PREVIEW_RESULT, PartResult, Report
 
 TITLE = "Convertir a SolidCraft"
 
@@ -39,7 +40,7 @@ STATE_STYLE = {
 }
 
 # Parts table: (title, flex, numeric)
-COLUMNS = [("Pieza", 4, False), ("Estado", 3, False), ("Volumen", 2, True), ("En SolidWorks", 2, True),
+COLUMNS = [("Pieza", 4, False), ("Estado", 3, False), ("Volumen", 2, True), ("Original", 2, True),
            ("Corrección", 3, False), ("Tiempo", 1, True)]
 
 
@@ -134,7 +135,7 @@ class ConverterApp:
                     ft.Container(ft.Icon(ft.Icons.VIEW_IN_AR_ROUNDED, color=ft.Colors.ON_PRIMARY_CONTAINER, size=26),
                                  width=46, height=46, border_radius=14, bgcolor=ft.Colors.PRIMARY_CONTAINER, alignment=ft.Alignment.CENTER),
                     ft.Column([ft.Text(TITLE, size=21, weight=ft.FontWeight.BOLD),
-                               ft.Text("Ensamblajes y piezas de SolidWorks a diseños de SolidCraft, comprobados con el original",
+                               ft.Text("SolidWorks y Fusion a diseños de SolidCraft, comprobados con el original",
                                        size=12, color=MUTED)], spacing=0, tight=True, expand=True),
                     self.theme_btn,
                 ],
@@ -147,7 +148,7 @@ class ConverterApp:
         self.src_name = ft.Text("Nada elegido todavía", size=16, weight=ft.FontWeight.W_600, max_lines=2,
                                 overflow=ft.TextOverflow.ELLIPSIS)
         self.src_folder = ft.Text("", size=12, color=MUTED, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
-        self.src_info = ft.Text("Un ensamblaje .SLDASM, cuyas piezas se buscan en su carpeta, o una pieza .SLDPRT suelta",
+        self.src_info = ft.Text("SolidWorks: ensamblaje .SLDASM o pieza .SLDPRT. Fusion: diseño .f3d o proyecto .f3z (se abre Fusion para exportarlo)",
                                 size=12, color=MUTED)
         self.out_text = ft.Text(self.out, size=13, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS, tooltip=self.out)
         self.up_switch = ft.Switch(label="Poner las piezas de pie", value=self.settings.get("up_y", True), on_change=self._remember)
@@ -166,7 +167,7 @@ class ConverterApp:
         left = ft.Container(
             ft.Column(
                 [
-                    panel(step_header("1", "Ensamblaje o pieza de SolidWorks"), self.src_name, self.src_folder, self.src_info,
+                    panel(step_header("1", "Fichero de SolidWorks o de Fusion"), self.src_name, self.src_folder, self.src_info,
                           ft.FilledTonalButton(content="Elegir fichero", icon=ft.Icons.FILE_OPEN_OUTLINED, on_click=self.pick_source)),
                     panel(step_header("2", "Carpeta de salida"), self.out_text,
                           ft.OutlinedButton(content="Cambiar carpeta", icon=ft.Icons.DRIVE_FOLDER_UPLOAD_OUTLINED, on_click=self.pick_out)),
@@ -190,7 +191,7 @@ class ConverterApp:
         self.pic_out = ft.Container(self._placeholder(), alignment=ft.Alignment.CENTER, expand=True)
         pictures = ft.Row(
             [
-                panel(self._caption(ft.Icons.PHOTO_OUTLINED, "SolidWorks · vista previa guardada"), self.pic_src, padding=14, expand=True),
+                panel(self._caption(ft.Icons.PHOTO_OUTLINED, "Original · vista previa guardada"), self.pic_src, padding=14, expand=True),
                 panel(self._caption(ft.Icons.VIEW_IN_AR_OUTLINED, "SolidCraft · resultado"), self.pic_out, padding=14, expand=True),
             ],
             spacing=12,
@@ -276,7 +277,8 @@ class ConverterApp:
 
     def _fill_row(self, part: PartResult) -> None:
         if part.stem not in self.rows:
-            return
+            self.stems.append(part.stem)
+            self._add_row(part.stem)
         state = "error" if not part.ok else ("warn" if part.matches_source is False else "ok")
         self._set_state(part.stem, state)
         c = self.rows[part.stem].cells
@@ -300,9 +302,9 @@ class ConverterApp:
     # ------------------------------------------------------------------ choices
     async def pick_source(self, _e=None) -> None:
         start = str(Path(self.source).parent) if self.source else None
-        files = await self.picker.pick_files(dialog_title="Ensamblaje o pieza de SolidWorks", initial_directory=start,
+        files = await self.picker.pick_files(dialog_title="Fichero de SolidWorks o de Fusion", initial_directory=start,
                                              file_type=ft.FilePickerFileType.CUSTOM,
-                                             allowed_extensions=["sldasm", "SLDASM", "sldprt", "SLDPRT"])
+                                             allowed_extensions=["sldasm", "SLDASM", "sldprt", "SLDPRT", "f3d", "F3D", "f3z", "F3Z"])
         if files and files[0].path:
             self.source = files[0].path
             self._remember()
@@ -337,6 +339,9 @@ class ConverterApp:
             self.stems = [src.stem]
             self.src_info.value = "Pieza suelta"
             self._add_row(src.stem)
+        elif src.suffix.lower() in FUSION:
+            self.stems = []
+            self.src_info.value = kind(src) + " · las piezas aparecen al exportarlas desde Fusion"
         else:
             try:
                 asm = read_assembly(src)
@@ -370,7 +375,7 @@ class ConverterApp:
     def start(self, _e=None) -> None:
         src = Path(self.source) if self.source else None
         if src is None or src.suffix.lower() not in SUPPORTED or not src.is_file():
-            self._toast("Elige primero un ensamblaje (.SLDASM) o una pieza (.SLDPRT) de SolidWorks.", ft.Colors.ERROR)
+            self._toast("Elige primero un fichero de SolidWorks (.SLDASM, .SLDPRT) o de Fusion (.f3d, .f3z).", ft.Colors.ERROR)
             return
         self.report = None
         self.running = True
@@ -397,6 +402,11 @@ class ConverterApp:
 
     def _on_progress(self, stage: str, done: int, total: int, part: PartResult | None) -> None:
         steps = total + 2
+        if stage == "export":
+            self.status.value = "Exportando desde Fusion… (Fusion se abre si no lo está)"
+            self.progress.value = None
+            self.page.update()
+            return
         if stage == "start" and self.stems:
             self._set_state(self.stems[0], "running")
         elif stage == "part" and part is not None:
@@ -420,7 +430,7 @@ class ConverterApp:
         self.convert_btn.disabled = False
         self.progress.value = 1
         good = sum(1 for p in report.parts if p.ok and p.matches_source is not False)
-        self.summary.value = f"{good} de {len(report.parts)} coinciden con SolidWorks"
+        self.summary.value = f"{good} de {len(report.parts)} coinciden con el original"
         placed = f" · {report.placed} de {report.instances} instancias colocadas" if report.instances > 1 else ""
         self.status.value = f"Terminado en {report.seconds:.0f} s{placed}."
         if report.output:
@@ -432,7 +442,7 @@ class ConverterApp:
         for w in report.warnings:
             self.log.value += f"Aviso: {w}\n"
         if report.ok():
-            self._toast("Conversión terminada: todo coincide con SolidWorks.", ft.Colors.GREEN)
+            self._toast("Conversión terminada: todo coincide con el original.", ft.Colors.GREEN)
         else:
             self._toast("Conversión terminada con avisos: revisa las piezas marcadas.", ft.Colors.AMBER)
         self.page.update()
