@@ -15,7 +15,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .. import step_fix
+from .. import step_fix, step_mesh_fix
+from ..mesh import Mesh
 from . import ir as ir_mod
 from ..solidcraft import script as sc
 from ..solidcraft.transform import Matrix, axis_angle, transpose
@@ -40,8 +41,7 @@ class PartResult:
     ok: bool = False
     volume_mm3: float | None = None
     bodies: int | None = None
-    faces_fixed: int = 0
-    circle_edges_fixed: int = 0
+    repair: str | None = None  # which orientation repair was kept
     source_volume_mm3: float | None = None  # SolidWorks' own display mesh
     matches_source: bool | None = None
     seconds: float = 0.0
@@ -140,6 +140,68 @@ def name_step_product(step: Path, name: str) -> None:
 VOLUME_TOLERANCE = 0.005  # relative
 BOX_TOLERANCE = 0.1  # mm
 
+# Ways to repair cadmpeg's orientation flags, best first over the test parts; each part keeps
+# the one whose result matches SolidWorks' own display mesh best.
+REPAIRS = [
+    ("malla+bordes", dict(faces_mode="mesh_loops", lines=True, arcs=True, circles=True)),
+    ("reglas", dict(faces_mode="rules", lines=False, arcs=False, circles=False)),
+    ("reglas+rectas+arcos", dict(faces_mode="rules", lines=True, arcs=True, circles=False)),
+    ("malla+arcos", dict(faces_mode="mesh_loops", lines=False, arcs=True, circles=True)),
+    ("reglas+arcos", dict(faces_mode="rules", lines=False, arcs=True, circles=False)),
+    ("reglas+arcos+círculos", dict(faces_mode="rules", lines=False, arcs=True, circles=True)),
+]
+
+
+def _mismatch(measured: dict, truth: Mesh) -> tuple[float, float, float]:
+    """(relative volume error, box error in mm, share of volume inside out) against the mesh."""
+    vol = (measured.get("total") or {}).get("volume_mm3")
+    boxes = [b.get("bbox") for b in measured.get("bodies") or [] if b.get("bbox")]
+    if vol is None or not boxes:
+        return float("inf"), float("inf"), 0
+    tv = truth.volume()
+    lo, hi = truth.bbox()
+    blo = [min(b["min"][k] for b in boxes) for k in range(3)]
+    bhi = [max(b["max"][k] for b in boxes) for k in range(3)]
+    box = max(max(abs(blo[k] - lo[k]), abs(bhi[k] - hi[k])) for k in range(3))
+    neg = sum(-(b.get("volume_mm3") or 0) for b in measured.get("bodies") or [] if (b.get("volume_mm3") or 0) < 0)
+    return abs(vol - tv) / max(abs(tv), 1e-9), box, neg / max(abs(tv), 1e-9)
+
+
+def _repair_step(step: Path, src: Path, build: Path, cadmpeg: Path, cli: Path, res: PartResult) -> None:
+    """Repair the orientation flags, trying each way until one matches SolidWorks' mesh."""
+    try:
+        truth = ir_mod.load(src, cadmpeg, cache=build / "ir" / f"{src.stem}.json").mesh()
+    except Exception:
+        truth = None
+    raw = step.read_text(encoding="latin-1")
+    if truth is None or not truth.triangles:
+        fix = step_fix.repair_file(step)  # no reference: rules only
+        res.repair = "reglas (sin malla de referencia)"
+        return
+    best = None
+    for name, opts in REPAIRS:
+        text, _fix = step_mesh_fix.repair_text(raw, truth, **opts)
+        trial = build / f"{step.stem}.trial.step"
+        trial.write_text(text, encoding="latin-1")
+        try:
+            vol_err, box_err, neg = _mismatch(sc.evaluate(cli, trial), truth)
+        except sc.SolidCraftError:
+            continue
+        score = vol_err + box_err / 100.0 + 2 * neg
+        if best is None or score < best[0]:
+            best = (score, name, text)
+        if vol_err <= VOLUME_TOLERANCE / 5 and box_err <= BOX_TOLERANCE / 2 and neg < 1e-4:
+            break  # good enough: no need to try the others
+    trial = build / f"{step.stem}.trial.step"
+    if trial.exists():
+        trial.unlink()
+    if best is None:
+        step_fix.repair_file(step)
+        res.repair = "reglas"
+        return
+    step.write_text(best[2], encoding="latin-1")
+    res.repair = best[1]
+
 
 def _check_against_source(src: Path, build: Path, cadmpeg: Path, measured: dict, res: PartResult, up_y: bool) -> None:
     """Compare the converted part with SolidWorks' own display mesh of it."""
@@ -180,15 +242,15 @@ def convert_part(src: Path, stem: str, out: Path, cli: Path, cadmpeg: Path, log:
     try:
         res.warnings += _run_cadmpeg(cadmpeg, src, step)
         name_step_product(step, stem)
-        fix = step_fix.repair_file(step)
-        res.faces_fixed = fix.flipped
-        res.circle_edges_fixed = fix.circle_edges
-        if fix.unknown:
-            res.warnings.append(f"{fix.unknown} de {fix.faces} caras con orientación sin verificar")
+        _repair_step(step, src, build, cadmpeg, cli, res)
+        if up_y:
+            # Turned here rather than with insert_step's up: "y": SolidCraft 0.16.2 rebuilds a
+            # turned import differently once the design is saved and opened again.
+            step.write_text(step_fix.rotate_text(step.read_text(encoding="latin-1"), Y_UP_TO_Z_UP), encoding="latin-1")
         res.step = str(step)
         s = sc.Script()
         s.add("file.new", name=stem)
-        s.add("file.insert_step", path=str(step), up="y" if up_y else "z")
+        s.add("file.insert_step", path=str(step))
         s.add("document.metadata.set", key=sc.METADATA_KEY, value={"source": str(src), "source_cad": "SolidWorks"})
         s.add("file.save_as", path=str(design))
         sc.run(cli, s.write(build / f"{stem}.part.json"))

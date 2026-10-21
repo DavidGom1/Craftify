@@ -506,6 +506,23 @@ def repair_text(text: str) -> tuple[str, Fix]:
     return st.text(), fix
 
 
+_POINT3 = re.compile(r"(CARTESIAN_POINT|DIRECTION)\s*\(\s*('(?:[^']|'')*')\s*,\s*\(\s*([^,()]+)\s*,\s*([^,()]+)\s*,\s*([^,()]+)\s*\)\s*\)")
+
+
+def rotate_text(text: str, m: tuple[float, ...]) -> str:
+    """Turn every 3D point and direction of a STEP file by the rotation m (row-major).
+
+    Two-dimensional points (curves in a surface's parameter space) are left alone. With a
+    proper rotation the orientation of every face and edge is unchanged.
+    """
+    def turn(match: re.Match) -> str:
+        x, y, z = (float(match.group(k)) for k in (3, 4, 5))
+        p = (m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z, m[6] * x + m[7] * y + m[8] * z)
+        return f"{match.group(1)}({match.group(2)},({p[0]!r},{p[1]!r},{p[2]!r}))"
+
+    return _POINT3.sub(turn, text)
+
+
 def repair_file(path: Path) -> Fix:
     out, fix = repair_text(path.read_text(encoding="latin-1"))
     path.write_text(out, encoding="latin-1")
