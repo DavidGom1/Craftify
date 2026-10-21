@@ -40,6 +40,7 @@ def build() -> Path:
         "--distpath", str(ROOT / "dist"),
         "--add-binary", f"{find_cadmpeg()}{os.pathsep}.",
         "--add-data", f"{icon}{os.pathsep}.",
+        "--add-data", f"{ROOT / 'fusion_addin'}{os.pathsep}fusion_addin",
         "--product-name", NAME,
         "--file-description", "Convierte ensamblajes y piezas de SolidWorks en diseños de SolidCraft",
         "--company-name", "Hidroconta",
