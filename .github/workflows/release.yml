@@ -77,3 +77,5 @@ jobs:
             dist/Craftify-*-windows-x64.zip
           body_path: .github/release-notes.md
           generate_release_notes: true
+          # v1.2.3-beta.1, v1.2.3-rc.1...: shown on GitHub as a pre-release
+          prerelease: ${{ contains(github.ref_name, '-') }}
