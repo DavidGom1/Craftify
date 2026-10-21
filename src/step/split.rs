@@ -89,6 +89,23 @@ impl StepFile {
         seen
     }
 
+    /// Whether the body's faces close up: every edge between exactly two of them. A solid whose
+    /// parts touch at a corner is closed so, while SolidCraft, which joins the vertices that
+    /// share a point, reads it as open.
+    pub fn closed(&self, solid: i64) -> bool {
+        let mut uses: HashMap<i64, usize> = HashMap::new();
+        for e in self.reach(&[solid], &HashSet::new()) {
+            if self.kind.get(&e).map(String::as_str) == Some("ORIENTED_EDGE") {
+                for r in self.refs.get(&e).into_iter().flatten() {
+                    if self.kind.get(r).map(String::as_str) == Some("EDGE_CURVE") {
+                        *uses.entry(*r).or_default() += 1;
+                    }
+                }
+            }
+        }
+        !uses.is_empty() && uses.values().all(|n| *n == 2)
+    }
+
     fn vertex_box(&self, solid: i64) -> Result<Option<Box3>> {
         let mut pts = Vec::new();
         for e in self.reach(&[solid], &HashSet::new()) {
@@ -226,7 +243,29 @@ fn remove_last_item(st: &str, d: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{remove_first_item, remove_last_item};
+    use super::{StepFile, remove_first_item, remove_last_item};
+
+    /// A body whose two faces share edge #20 and, when `closed`, edge #21 (else each face has
+    /// its own #21 and #22: an open seam).
+    fn two_faces(closed: bool) -> StepFile {
+        let other = if closed { 21 } else { 22 };
+        StepFile::new(&format!(
+            "#1 = MANIFOLD_SOLID_BREP('',#2);\n#2 = CLOSED_SHELL('',(#3,#4));\n\
+             #3 = ADVANCED_FACE('',(#5),#9,.T.);\n#4 = ADVANCED_FACE('',(#6),#9,.T.);\n\
+             #5 = FACE_OUTER_BOUND('',#7,.T.);\n#6 = FACE_OUTER_BOUND('',#8,.T.);\n\
+             #7 = EDGE_LOOP('',(#10,#11));\n#8 = EDGE_LOOP('',(#12,#13));\n\
+             #10 = ORIENTED_EDGE('',*,*,#20,.T.);\n#11 = ORIENTED_EDGE('',*,*,#21,.T.);\n\
+             #12 = ORIENTED_EDGE('',*,*,#20,.F.);\n#13 = ORIENTED_EDGE('',*,*,#{other},.F.);\n\
+             #20 = EDGE_CURVE('',#30,#31,#40,.T.);\n#21 = EDGE_CURVE('',#31,#30,#40,.T.);\n\
+             #22 = EDGE_CURVE('',#31,#30,#40,.T.);\n"
+        ))
+    }
+
+    #[test]
+    fn a_body_is_closed_when_every_edge_has_two_faces() {
+        assert!(two_faces(true).closed(1));
+        assert!(!two_faces(false).closed(1));
+    }
 
     #[test]
     fn removes_trailing_items_like_the_lookahead() {

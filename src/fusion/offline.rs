@@ -27,10 +27,11 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use super::f3d::{Assembly, F3dError, IDENTITY4, Mat4, matmul4, open_f3d, read_assembly};
+use super::sketch::{self, Sketch};
 use super::{PREVIEW_FUSION, preview_png, stem_for};
 use crate::converter::{Hooks, Stage};
 use crate::report::{PartResult, Report};
-use crate::solidcraft::assembly::{Placement, assembly_script};
+use crate::solidcraft::assembly::{Placement, assembly_script, assembly_script_with};
 use crate::solidcraft::script::{self as sc, METADATA_KEY, Measured, Script};
 use crate::solidcraft::transform::IDENTITY;
 use crate::step::clean::clean;
@@ -216,33 +217,41 @@ fn geometry(doc: &Document, cadmpeg: &Path, build: &Path, hooks: &Hooks) -> Resu
     Ok(Some(StepFile::new(&read_latin1(&step)?)))
 }
 
-/// Component id -> its bodies in the STEP file.
-fn assign(doc: &Document, step: &StepFile, wanted: &HashSet<u64>) -> Result<HashMap<u64, Vec<i64>>> {
-    let mut order: Vec<(&str, u64, u64, Option<super::f3d::Box3>)> = Vec::new();
+/// Component id -> its bodies in the STEP file, and each body's name (by solid id).
+type Assigned = (HashMap<u64, Vec<i64>>, HashMap<i64, String>);
+
+fn assign(doc: &Document, step: &StepFile, wanted: &HashSet<u64>) -> Result<Assigned> {
+    let mut order: Vec<(u64, &super::f3d::Body)> = Vec::new();
     for (cid, c) in &doc.asm.components {
         for b in &c.bodies {
-            order.push((b.brep.as_str(), b.selector, *cid, b.bbox));
+            order.push((*cid, b));
         }
     }
-    order.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1))); // stable
+    order.sort_by(|a, b| (a.1.brep.as_str(), a.1.selector).cmp(&(b.1.brep.as_str(), b.1.selector))); // stable
     let items = step.solids()?; // by entity id: the order cadmpeg wrote them
     let mut out: HashMap<u64, Vec<i64>> = HashMap::new();
+    let mut names: HashMap<i64, String> = HashMap::new();
     if order.len() == items.len() {
-        for ((_, _, cid, _), s) in order.iter().zip(&items) {
+        for ((cid, b), s) in order.iter().zip(&items) {
             if wanted.contains(cid) {
                 out.entry(*cid).or_default().push(s.id);
+                if let Some(n) = &b.name {
+                    names.insert(s.id, n.clone());
+                }
             }
         }
-        return Ok(out);
+        return Ok((out, names));
     }
     // cadmpeg left some body out: each solid to the cached box that holds it best
-    let slots: Vec<(u64, super::f3d::Box3)> =
-        order.iter().filter_map(|(_, _, cid, b)| b.filter(|_| wanted.contains(cid)).map(|b| (*cid, b))).collect();
+    let slots: Vec<(u64, super::f3d::Box3, Option<&String>)> = order
+        .iter()
+        .filter_map(|(cid, b)| b.bbox.filter(|_| wanted.contains(cid)).map(|bx| (*cid, bx, b.name.as_ref())))
+        .collect();
     let pmax = |a: f64, b: f64| if b > a { b } else { a };
     let mut pairs: Vec<(f64, i64, usize)> = Vec::new();
     for s in &items {
         let Some(sb) = s.bbox else { continue };
-        for (i, (_, bx)) in slots.iter().enumerate() {
+        for (i, (_, bx, _)) in slots.iter().enumerate() {
             let outside = util::py_sum((0..3).map(|k| pmax(0.0, bx.0[k] - sb.0[k]) + pmax(0.0, sb.1[k] - bx.1[k])));
             if outside <= 0.05 * 6.0 {
                 let slack = util::py_sum((0..3).map(|k| (bx.1[k] - bx.0[k]) - (sb.1[k] - sb.0[k])));
@@ -257,9 +266,40 @@ fn assign(doc: &Document, step: &StepFile, wanted: &HashSet<u64>) -> Result<Hash
             taken_s.insert(sid);
             taken_b.insert(i);
             out.entry(slots[i].0).or_default().push(sid);
+            if let Some(n) = slots[i].2 {
+                names.insert(sid, n.clone());
+            }
         }
     }
-    Ok(out)
+    Ok((out, names))
+}
+
+/// A STEP string's contents (ISO 10303-21): quotes and backslashes doubled, anything outside
+/// printable ASCII as \X2\hhhh\X0\.
+fn step_string(s: &str) -> String {
+    let mut out = String::new();
+    for u in s.encode_utf16() {
+        match u {
+            0x27 => out.push_str("''"),
+            0x5c => out.push_str("\\\\"),
+            0x20..=0x7e => out.push(u as u8 as char),
+            _ => out.push_str(&format!("\\X2\\{u:04X}\\X0\\")),
+        }
+    }
+    out
+}
+
+static SOLID_LINE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^#(\d+)(\s*=\s*(?:MANIFOLD_SOLID_BREP|BREP_WITH_VOIDS)\s*\(\s*)'(?:[^']|'')*'").expect("solid pattern"));
+
+/// Give the solids the names Fusion shows for their bodies (SolidCraft names bodies after them).
+fn name_solids(text: &str, names: &HashMap<i64, String>) -> String {
+    SOLID_LINE
+        .replace_all(text, |c: &regex::Captures| match c[1].parse::<i64>().ok().and_then(|id| names.get(&id)) {
+            Some(n) => format!("#{}{}'{}'", &c[1], &c[2], step_string(n)),
+            None => c[0].to_owned(),
+        })
+        .into_owned()
 }
 
 /// Fusion caches a box that holds the body but may be a little loose round curved faces: the
@@ -279,15 +319,19 @@ fn box_error(cached: ([f64; 3], [f64; 3]), got: ([f64; 3], [f64; 3])) -> Option<
     None
 }
 
-static OPEN_BODY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^solid #(\d+): imported as an open body").expect("warning pattern"));
+/// The solid by its entity id, or by its name once it has one.
+static OPEN_BODY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^solid (?:#(\d+)|'(.*)'): imported as an open body").expect("warning pattern"));
 
-/// What SolidCraft could not read well (a surface body is open on purpose).
-fn import_warnings(results: &[Value], step: &StepFile) -> Vec<String> {
-    let surface = |w: &str| {
+/// What SolidCraft could not read well. Not an open body that is so on purpose (a surface) or
+/// only to SolidCraft (closed in the file: parts that touch at a corner).
+fn import_warnings(results: &[Value], step: &StepFile, solids: &[i64], names: &HashMap<i64, String>) -> Vec<String> {
+    let named = |name: &str| solids.iter().copied().find(|id| names.get(id).is_some_and(|n| n == name));
+    let not_open = |w: &str| {
         OPEN_BODY
             .captures(w)
-            .and_then(|m| m[1].parse::<i64>().ok())
-            .is_some_and(|id| step.kind.get(&id).map(String::as_str) == Some("SHELL_BASED_SURFACE_MODEL"))
+            .and_then(|m| m.get(1).and_then(|id| id.as_str().parse::<i64>().ok()).or_else(|| m.get(2).and_then(|n| named(n.as_str()))))
+            .is_some_and(|id| step.kind.get(&id).map(String::as_str) == Some("SHELL_BASED_SURFACE_MODEL") || step.closed(id))
     };
     for r in results {
         if let Some(obj) = r.as_object().filter(|o| o.contains_key("created_bodies")) {
@@ -295,7 +339,7 @@ fn import_warnings(results: &[Value], step: &StepFile) -> Vec<String> {
             return warnings
                 .iter()
                 .filter_map(|w| w.as_str())
-                .filter(|w| !w.contains("could not be meshed") && !surface(w))
+                .filter(|w| !w.contains("could not be meshed") && !not_open(w))
                 .map(str::to_owned)
                 .collect();
         }
@@ -324,6 +368,7 @@ fn part(
     doc: &Document,
     cid: u64,
     solids: &[i64],
+    names: &HashMap<i64, String>,
     step: &StepFile,
     stem: &str,
     out: &Path,
@@ -341,7 +386,7 @@ fn part(
         let part_step = build.join(format!("{stem}.step"));
         let keep: HashSet<i64> = solids.iter().copied().collect();
         let (text, done) = clean(&step.keep_only(&keep)?, 1e-3)?;
-        write_latin1(&part_step, &text)?;
+        write_latin1(&part_step, &name_solids(&text, names))?;
         res.step = Some(s(&part_step));
         res.repair = Some(format!("lectura directa{}", if done.seams > 0 { format!(" ({} costuras)", done.seams) } else { String::new() }));
         let mut script = Script::default();
@@ -353,7 +398,7 @@ fn part(
         );
         script.add("file.save_as", json!({ "path": s(&design) }));
         let results = sc::run(cli, &script.write(&build.join(format!("{stem}.part.json")))?)?;
-        let problems = import_warnings(&results, step);
+        let problems = import_warnings(&results, step, solids, names);
         if let Some(first) = problems.first() {
             let more = if problems.len() > 1 { format!(" (y {} más)", problems.len() - 1) } else { String::new() };
             res.warnings.push(format!("SolidCraft avisa al leerla: {first}{more}"));
@@ -363,7 +408,8 @@ fn part(
         take_measurements(&mut res, &measured);
         let boxes = comp.boxes();
         let got = Measured(&measured).bbox()?;
-        if let (false, Some(got)) = (boxes.is_empty(), got) {
+        // with a body's box missing their union is too small to compare with
+        if let Some(got) = got.filter(|_| !boxes.is_empty() && boxes.len() == comp.bodies.len()) {
             let err = box_error(bounds(&boxes), got);
             res.matches_source = Some(err.is_none() && problems.is_empty());
             if let Some(err) = err {
@@ -379,6 +425,9 @@ fn part(
         if !res.ok {
             res.warnings.push("la pieza convertida no tiene sólidos".into());
         }
+        if let Some(sketches) = doc.asm.sketches.get(&cid).filter(|s| !s.is_empty()) {
+            add_sketches(&mut res, sketches, &design, &build, stem, cli);
+        }
         Ok(())
     })();
     if let Err(e) = attempt {
@@ -387,6 +436,26 @@ fn part(
     res.seconds = round1(t0.elapsed().as_secs_f64());
     hooks.log(&res.log_line());
     res
+}
+
+/// The component's sketches into its design, in a run of their own: SolidCraft writes nothing
+/// when a command fails, so a sketch it refuses leaves the part as it was.
+fn add_sketches(res: &mut PartResult, sketches: &[Sketch], design: &Path, build: &Path, stem: &str, cli: &Path) {
+    let mut script = Script::default();
+    script.add("doc.open", json!({ "path": s(design) }));
+    for sk in sketches {
+        sketch::add_to(&mut script, sk);
+    }
+    script.add("file.save_as", json!({ "path": s(design) }));
+    let run = script.write(&build.join(format!("{stem}.sketches.json"))).and_then(|p| sc::run(cli, &p));
+    if let Err(e) = run {
+        res.warnings.push(format!("no se han podido pasar los bocetos: {e}"));
+        return;
+    }
+    let skipped: usize = sketches.iter().map(|s| s.skipped).sum();
+    if skipped > 0 {
+        res.warnings.push(format!("{skipped} curvas de los bocetos aún no se pueden pasar (elipses, textos, aristas proyectadas…)"));
+    }
 }
 
 pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: &Path, picture: bool, hooks: &Hooks) -> Result<Report> {
@@ -405,7 +474,7 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
     let mut designs: HashMap<(String, u64), PathBuf> = HashMap::new();
     let stems: HashMap<(String, u64), String> = plan.iter().map(|(k, c, s)| ((k.clone(), *c), s.clone())).collect();
     let mut steps: HashMap<String, Option<StepFile>> = HashMap::new();
-    let mut assigned: HashMap<String, HashMap<u64, Vec<i64>>> = HashMap::new();
+    let mut assigned: HashMap<String, Assigned> = HashMap::new();
     for (n, (key, cid, stem)) in plan.iter().enumerate() {
         let d = &docs[key];
         if !steps.contains_key(key) {
@@ -414,15 +483,16 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
             let wanted_here: HashSet<u64> = plan.iter().filter(|(k, _, _)| k == key).map(|(_, c, _)| *c).collect();
             let a = match &step {
                 Some(st) => assign(d, st, &wanted_here)?,
-                None => HashMap::new(),
+                None => Default::default(),
             };
             assigned.insert(key.clone(), a);
             steps.insert(key.clone(), step);
         }
-        let solids = assigned[key].get(cid).cloned().unwrap_or_default();
+        let (by_comp, names) = &assigned[key];
+        let solids = by_comp.get(cid).cloned().unwrap_or_default();
         let r = match steps[key].as_ref() {
             Some(step) if !solids.is_empty() => {
-                let r = part(d, *cid, &solids, step, stem, &out, cli, src, hooks);
+                let r = part(d, *cid, &solids, names, step, stem, &out, cli, src, hooks);
                 if r.ok
                     && let Some(des) = &r.design
                 {
@@ -471,8 +541,25 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
         let mut meta = Map::new();
         meta.insert("source".into(), json!(s(src)));
         meta.insert("source_cad".into(), json!("Fusion"));
-        let (script, _) = assembly_script(&name, &placements, &design, meta);
-        match script.write(&build.join(format!("{name}.assembly.json"))).and_then(|p| sc::run(cli, &p)) {
+        // a linked part brings only its bodies: its sketches are drawn again in its component
+        let by_stem: HashMap<&str, &(String, u64)> = stems.iter().map(|(k, v)| (v.as_str(), k)).collect();
+        let sketches_of = |stem: &str| by_stem.get(stem).and_then(|(key, cid)| docs[key].asm.sketches.get(cid)).filter(|s| !s.is_empty());
+        let (with, _) = assembly_script_with(&name, &placements, &design, meta.clone(), |stem, script| match sketches_of(stem) {
+            Some(sks) => {
+                sks.iter().for_each(|sk| sketch::add_to(script, sk));
+                true
+            }
+            None => false,
+        });
+        let run = |script: &Script| script.write(&build.join(format!("{name}.assembly.json"))).and_then(|p| sc::run(cli, &p));
+        let mut done = run(&with);
+        if let Err(e) = &done
+            && placements.iter().any(|p| sketches_of(&p.stem).is_some())
+        {
+            report.warnings.push(format!("el ensamblaje va sin bocetos: {e}"));
+            done = run(&assembly_script(&name, &placements, &design, meta).0);
+        }
+        match done {
             Ok(_) => {
                 report.output = Some(s(&design));
                 report.placed = placements.len();
@@ -488,4 +575,19 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
     }
     finish(&mut report, &out, cli, picture, hooks, t0, total)?;
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn solids_take_their_bodies_names() {
+        let text = "#5 = MANIFOLD_SOLID_BREP('',#4);\n#9 = BREP_WITH_VOIDS('old',#8,(#7));\n#12 = MANIFOLD_SOLID_BREP('',#11);\n";
+        let names = HashMap::from([(5, "Título d'A".to_owned()), (9, "Cuerpo2".to_owned())]);
+        assert_eq!(
+            name_solids(text, &names),
+            "#5 = MANIFOLD_SOLID_BREP('T\\X2\\00ED\\X0\\tulo d''A',#4);\n#9 = BREP_WITH_VOIDS('Cuerpo2',#8,(#7));\n#12 = MANIFOLD_SOLID_BREP('',#11);\n"
+        );
+    }
 }

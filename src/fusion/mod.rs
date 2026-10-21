@@ -10,6 +10,7 @@
 pub mod bridge;
 pub mod f3d;
 pub mod offline;
+pub mod sketch;
 
 use std::collections::HashSet;
 use std::io::{Cursor, Read};

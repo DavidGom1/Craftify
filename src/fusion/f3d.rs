@@ -24,6 +24,7 @@ pub const BODY_MAP: &str = "74CA4562-59F8-4C97-8AD1-F8297C21F9AA"; // BREP body 
 pub const TRANSFORM_CACHE: &str = "549FBB80-B890-473E-A5C0-415D3D9BF4E6"; // solved world transforms of an occurrence
 pub const OCCURRENCE_TRANSFORM: &str = "66E375EA-40F1-4115-8D83-0F23DD30593E"; // an occurrence's transform object
 pub const JOINT: &str = "8DFDD543-F823-43AA-BDAF-C638E023F0A0"; // the context Fusion shows a joint-driven occurrence in
+pub const COMPONENT: &str = "E03784ED-5E19-4E14-B9F2-3B07017018CD"; // a component (add-in Component)
 
 /// Row-major 4x4, column vectors, mm.
 pub type Mat4 = [f64; 16];
@@ -124,7 +125,7 @@ impl Segment {
         self.types.iter().find(|t| t.guid.to_uppercase() == guid.to_uppercase()).map_or(&[], |t| t.ids.as_slice())
     }
 
-    fn guid_of(&self, entity: u64) -> Option<&str> {
+    pub(super) fn guid_of(&self, entity: u64) -> Option<&str> {
         self.type_of.get(&entity).map(|&i| self.types[i].guid.as_str())
     }
 }
@@ -231,6 +232,8 @@ pub struct Body {
     pub selector: u64,
     /// The box Fusion cached for it, in the component's coordinates.
     pub bbox: Option<Box3>,
+    /// The name Fusion shows for it.
+    pub name: Option<String>,
 }
 
 pub struct Component {
@@ -261,17 +264,31 @@ pub struct Assembly {
     pub components: IndexMap<u64, Component>,
     pub placements: Vec<Placement>,
     pub root: Option<u64>,
+    /// Each component's sketches, by component record id.
+    pub sketches: HashMap<u64, Vec<super::sketch::Sketch>>,
 }
 
 static UTF16: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?-u)(?:[\x20-\x7e]\x00){2,}").expect("utf16 pattern"));
 static REF3: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?-u)\x01\x00\x01").expect("ref pattern"));
+static UUID16: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?-u)\x24\x00\x00\x00(?:[0-9A-Fa-f-]\x00){36}").expect("uuid pattern"));
 static PARENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s-u)\x01(.{8})\x00\x00").expect("parent pattern"));
 
 fn utf16_strings(b: &[u8]) -> Vec<String> {
     UTF16.find_iter(b).map(|m| m.as_bytes().iter().step_by(2).map(|c| *c as char).collect()).collect()
 }
 
+/// The component's name: the length-prefixed UTF-16 string right after the record's last UUID
+/// (whole, accents included). Older records: the one after "Part Number", or the last string.
 fn component_name(rec: &[u8]) -> String {
+    if let Some(m) = UUID16.find_iter(rec).last() {
+        let mut r = Reader { data: rec, pos: m.end() };
+        if let Ok(name) = r.utf16()
+            && !name.trim().is_empty()
+            && !name.chars().any(char::is_control)
+        {
+            return name;
+        }
+    }
     let strings = utf16_strings(&rec[..rec.len().min(1200)]);
     for (i, s) in strings.iter().enumerate() {
         if s == "Part Number" && i + 1 < strings.len() {
@@ -304,7 +321,7 @@ fn to_mm(v: [f64; 16]) -> Mat4 {
     std::array::from_fn(|k| v[k] * if k == 3 || k == 7 || k == 11 { 10.0 } else { 1.0 })
 }
 
-fn find_matrix(rec: &[u8]) -> Option<Mat4> {
+pub(super) fn find_matrix(rec: &[u8]) -> Option<Mat4> {
     (0..rec.len().saturating_sub(127)).map(|i| doubles16(rec, i)).find(rigid).map(to_mm)
 }
 
@@ -358,6 +375,13 @@ fn cached_world(s: &Segment) -> Result<HashMap<u64, Mat4>> {
         let others: Vec<&Mat4> = found.iter().filter(|(c, _)| *c != owner).map(|(_, m)| m).collect();
         if let Some(m) = shown.last().or(others.last()) {
             out.insert(owner, **m);
+            // newer files have no transform object: the cache names the placement itself
+            let placement = (0..rec.len().saturating_sub(7))
+                .map(|k| u64_at(rec, k))
+                .find(|r| s.guid_of(*r).is_some_and(|g| g.eq_ignore_ascii_case(PLACEMENT)));
+            if let Some(p) = placement {
+                out.insert(p, **m);
+            }
         }
     }
     Ok(out)
@@ -387,7 +411,11 @@ fn solve_free(s: &Segment, placements: &mut [Placement], free: &[u64], root: Opt
             continue;
         }
         let obj = placements[i].id + 3; // the occurrence's transform object follows its placement
-        if let (Some(m), Some(OCCURRENCE_TRANSFORM)) = (cached.get(&obj), s.guid_of(obj)) {
+        let m = match (cached.get(&obj), s.guid_of(obj)) {
+            (Some(m), Some(OCCURRENCE_TRANSFORM)) => Some(m),
+            _ => cached.get(&placements[i].id),
+        };
+        if let Some(m) = m {
             let w = world(placements, &by_target, root, placements[i].parent, 0);
             placements[i].matrix = matmul4(&rigid_inverse(&w), m);
         }
@@ -401,13 +429,17 @@ pub fn read_assembly(f: &F3d) -> Result<Assembly> {
         s.types.iter().filter(|t| t.base.to_uppercase() == NAMING_SPACE_BASE).flat_map(|t| t.ids.iter().copied()).collect();
     spaces.sort_unstable();
     let mut components: IndexMap<u64, Component> = IndexMap::new();
-    // A component record is the nearest record before its naming space that carries "Part Number".
+    // A component record is the nearest component record before its naming space (many carry no
+    // "Part Number", which older files were recognised by).
     for &sp in &spaces {
         let (from, to) = (sp as i128 - 1, (sp as i128 - 6).max(0));
         let mut cand = from;
         while cand > to {
             let c = cand as u64;
-            if s.index.contains_key(&c) && utf16_strings(&s.record(c)?[..s.record(c)?.len().min(1200)]).iter().any(|x| x == "Part Number") {
+            if s.index.contains_key(&c)
+                && (s.guid_of(c).is_some_and(|g| g.eq_ignore_ascii_case(COMPONENT))
+                    || utf16_strings(&s.record(c)?[..s.record(c)?.len().min(1200)]).iter().any(|x| x == "Part Number"))
+            {
                 components.insert(c, Component { name: component_name(s.record(c)?), space: sp, bodies: Vec::new() });
                 break;
             }
@@ -495,12 +527,14 @@ pub fn read_assembly(f: &F3d) -> Result<Assembly> {
                 continue;
             }
             let bbox = body_box(s, suffix)?;
+            let name = if s.index.contains_key(&suffix) { body_name(s.record(suffix)?) } else { None };
             if let Some(c) = components.get_mut(&roots[i - 1]) {
-                c.bodies.push(Body { brep: brep.clone(), selector, bbox });
+                c.bodies.push(Body { brep: brep.clone(), selector, bbox, name });
             }
         }
     }
-    Ok(Assembly { components, placements, root })
+    let sketches = super::sketch::read_sketches(s, &roots);
+    Ok(Assembly { components, placements, root, sketches })
 }
 
 /// (body selector, entity suffix) pairs: a u32 count after the header's zero run.
@@ -524,12 +558,30 @@ fn body_pairs(rec: &[u8]) -> Vec<(u64, u64)> {
     Vec::new()
 }
 
+/// The body's name, from its record (the one at its entity suffix). After the body's UUID come
+/// 16 bytes and the u32 number of Fusion's default name ("Cuerpo45": Fusion adds the word in
+/// its own language); after the fourth UUID, the appearance's name, 23 bytes and the name the
+/// user gave it, empty when it has the default one.
+fn body_name(rec: &[u8]) -> Option<String> {
+    let uuids: Vec<usize> = UUID16.find_iter(rec).map(|m| m.end()).collect();
+    if uuids.len() < 4 || uuids[0] + 20 > rec.len() {
+        return None;
+    }
+    let number = u32::from_le_bytes(rec[uuids[0] + 16..uuids[0] + 20].try_into().ok()?);
+    let mut r = Reader { data: rec, pos: uuids[3] + 4 };
+    r.utf16().ok()?; // appearance
+    r.pos += 23;
+    let own = r.utf16().ok().filter(|n| !n.trim().is_empty() && !n.chars().any(char::is_control));
+    own.or_else(|| (1..1 << 24).contains(&number).then(|| format!("Cuerpo{number}")))
+}
+
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
     needle.is_empty() || hay.windows(needle.len()).any(|w| w == needle)
 }
 
 /// The body's cached box: records suffix+1..3 each hold the same marker byte 1 and six f64
-/// (xmax, ymax, zmax, xmin, ymin, zmin, centimetres).
+/// (xmax, ymax, zmax, xmin, ymin, zmin, centimetres). A face on a plane through the origin can
+/// leave rounding noise such as -1e-14 there.
 fn body_box(s: &Segment, suffix: u64) -> Result<Option<Box3>> {
     let mut recs = Vec::new();
     for k in 1..=3 {
@@ -553,7 +605,7 @@ fn body_box(s: &Segment, suffix: u64) -> Result<Option<Box3>> {
             continue;
         }
         let v: [f64; 6] = std::array::from_fn(|k| f64_at(frame, 1 + 8 * k));
-        if !v.iter().all(|x| x.is_finite() && (*x == 0.0 || (1e-9 < x.abs() && x.abs() < 1e6))) {
+        if !v.iter().all(|x| x.is_finite() && (*x == 0.0 || (1e-20 < x.abs() && x.abs() < 1e6))) {
             continue;
         }
         if (0..3).all(|k| v[k] >= v[k + 3]) && (0..3).any(|k| v[k] - v[k + 3] > 1e-7) {
@@ -561,4 +613,54 @@ fn body_box(s: &Segment, suffix: u64) -> Result<Option<Box3>> {
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn utf16(s: &str) -> Vec<u8> {
+        let units: Vec<u16> = s.encode_utf16().collect();
+        let mut b = (units.len() as u32).to_le_bytes().to_vec();
+        b.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+        b
+    }
+
+    #[test]
+    fn component_name_is_the_string_after_the_last_uuid() {
+        let mut rec = vec![3, 0, 0, 0, 0x34, 0x32, 0x33, 0, 0];
+        rec.extend(utf16("PrismMaterial-018"));
+        rec.extend([1, 0, 0]);
+        rec.extend(utf16("234ea228-6b04-4ce6-994c-87588a5b0f1a"));
+        rec.extend(utf16("Título"));
+        rec.extend([0, 0]);
+        assert_eq!(component_name(&rec), "Título");
+    }
+
+    /// A body record: its UUID, 16 bytes, its number, two more UUIDs, the material's, 4 bytes,
+    /// the appearance, 23 bytes and the name the user gave it.
+    fn body_record(number: u32, own: &str) -> Vec<u8> {
+        let mut rec = vec![3, 0, 0, 0, 0x32, 0x39, 0x39];
+        rec.extend(utf16("24c5c51c-60a9-406f-bce2-7ba33be8bc82"));
+        rec.extend([0; 16]);
+        rec.extend(number.to_le_bytes());
+        rec.extend([1, 0, 0, 0]);
+        rec.extend(utf16("75a56572-8317-4074-96e1-dd62fc31e11a"));
+        rec.extend(utf16("FCC740D7-8B1A-42F5-B1F6-C4605D3E3989"));
+        rec.extend(utf16("C1EEA57C-3F56-45FC-B8CB-A9EC46A9994C"));
+        rec.extend([0; 4]);
+        rec.extend(utf16("PrismMaterial-018"));
+        rec.extend([1, 0xcc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x6c, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        rec.extend(utf16(own));
+        rec.extend([0; 16]);
+        rec
+    }
+
+    #[test]
+    fn body_name_is_its_own_or_fusions_default() {
+        assert_eq!(body_name(&body_record(45, "")).as_deref(), Some("Cuerpo45"));
+        assert_eq!(body_name(&body_record(3, "Fondo Rojo")).as_deref(), Some("Fondo Rojo"));
+        assert_eq!(body_name(&body_record(3, "Señal")).as_deref(), Some("Señal"));
+        assert_eq!(body_name(&[0; 40]), None);
+    }
 }

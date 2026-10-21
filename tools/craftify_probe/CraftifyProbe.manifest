@@ -1,0 +1,13 @@
+{
+	"autodeskProduct": "Fusion",
+	"type": "addin",
+	"id": "6b1d2a77-3c4e-4f80-9d2b-7e5a1c9f0b43",
+	"author": "Craftify",
+	"description": {
+		"": "Investigación para Craftify: vuelca lo que Fusion sabe de un diseño (solo lectura)"
+	},
+	"version": "0.1.0",
+	"runOnStartup": false,
+	"supportedOS": "windows",
+	"editEnabled": true
+}

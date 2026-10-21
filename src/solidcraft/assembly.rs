@@ -42,6 +42,19 @@ pub fn assembly_script(
     out_design: &Path,
     metadata: Map<String, Value>,
 ) -> (Script, IndexMap<String, String>) {
+    assembly_script_with(name, placements, out_design, metadata, |_, _| false)
+}
+
+/// As [`assembly_script`], and `inside(stem, script)` adds what each part has besides its bodies
+/// (a linked design brings only those): it runs with that part's component active, before any
+/// occurrence moves, and says whether it added anything.
+pub fn assembly_script_with(
+    name: &str,
+    placements: &[Placement],
+    out_design: &Path,
+    metadata: Map<String, Value>,
+    mut inside: impl FnMut(&str, &mut Script) -> bool,
+) -> (Script, IndexMap<String, String>) {
     let mut s = Script::default();
     s.add("file.new", json!({ "name": name }));
     let mut counts: IndexMap<&str, usize> = IndexMap::new();
@@ -58,6 +71,18 @@ pub fn assembly_script(
         let occ = format!("{}:{n}", p.stem);
         mapping.insert(if p.label.is_empty() { occ.clone() } else { p.label.clone() }, occ.clone());
         todo.push((p, occ));
+    }
+    let mut any = false;
+    for &stem in counts.keys() {
+        let mut part = Script::default();
+        if inside(stem, &mut part) {
+            s.add("component.activate", json!({ "component": stem }));
+            s.commands.extend(part.commands);
+            any = true;
+        }
+    }
+    if any {
+        s.add("component.activate", json!({ "component": "root" }));
     }
     for (p, occ) in &todo {
         add_moves(&mut s, occ, &p.rotation, &p.translation_mm);
