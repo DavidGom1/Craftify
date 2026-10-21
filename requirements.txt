@@ -1,5 +1,1 @@
-# The window (the converter itself needs only the Python standard library).
 flet==1.0.4
-# Optional: nicer look for the plain Tkinter fallback window.
-sv-ttk==2.6.1
-darkdetect==0.8.0

@@ -12,7 +12,8 @@ from pathlib import Path
 
 import flet as ft
 
-from .gui import DEFAULT_OUT, _find_solidcraft, _load_settings, _save_settings
+from . import settings as prefs
+from .settings import DEFAULT_OUT
 from .sw.assembly import read_assembly
 from .sw.convert import PREVIEW_RESULT, SUPPORTED, PartResult, Report, convert, preview_png
 
@@ -83,7 +84,7 @@ class PartRow:
 class ConverterApp:
     def __init__(self, page: ft.Page) -> None:
         self.page = page
-        self.settings = _load_settings()
+        self.settings = prefs.load()
         self.report: Report | None = None
         self.rows: dict[str, PartRow] = {}
         self.states: dict[str, str] = {}
@@ -341,7 +342,7 @@ class ConverterApp:
     def _remember(self, _e=None) -> None:
         theme = {ft.ThemeMode.LIGHT: "light", ft.ThemeMode.DARK: "dark"}.get(self.page.theme_mode, "system")
         self.settings.update(source=self.source, out=self.out, up_y=bool(self.up_switch.value), theme=theme)
-        _save_settings(self.settings)
+        prefs.save(self.settings)
 
     def toggle_theme(self, _e=None) -> None:
         if self.page.theme_mode == ft.ThemeMode.SYSTEM:
@@ -447,7 +448,7 @@ class ConverterApp:
     def open_result(self, _e=None) -> None:
         if not self.report or not self.report.output:
             return
-        exe = _find_solidcraft()
+        exe = prefs.find_solidcraft()
         if exe:
             subprocess.Popen([str(exe), self.report.output])
         else:
