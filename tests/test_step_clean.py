@@ -115,6 +115,84 @@ class OuterShellTest(unittest.TestCase):
         self.assertEqual(_ref(st.ent[300].args[2]), small_shell)
 
 
+def _polyhedron(points: list[tuple[float, float, float]], faces: list[list[int]]) -> str:
+    """A closed shell of flat faces (each a vertex list, anticlockwise seen from outside), one
+    VERTEX_POINT per point, one line edge per pair of neighbouring corners."""
+    out, n = [], [1000]
+
+    def add(text: str) -> int:
+        n[0] += 1
+        out.append(f"#{n[0]} = {text};")
+        return n[0]
+
+    def vec(a, b):
+        return tuple(b[k] - a[k] for k in range(3))
+
+    def cross(a, b):
+        return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+    def unit(a):
+        m = math.sqrt(sum(x * x for x in a))
+        return tuple(x / m for x in a)
+
+    def pt(p):
+        return add(f"CARTESIAN_POINT('',({p[0]!r},{p[1]!r},{p[2]!r}))")
+
+    def direction(d):
+        return add(f"DIRECTION('',({d[0]!r},{d[1]!r},{d[2]!r}))")
+
+    verts = [add(f"VERTEX_POINT('',#{pt(p)})") for p in points]
+    edges: dict[tuple[int, int], int] = {}
+    face_ids = []
+    for poly in faces:
+        a, b, c = (points[i] for i in poly[:3])
+        normal = unit(cross(vec(a, b), vec(a, c)))
+        ref = unit(vec(a, b))
+        plane = add(f"PLANE('',#{add(f'AXIS2_PLACEMENT_3D({chr(39) * 2},#{pt(a)},#{direction(normal)},#{direction(ref)})')})")
+        oes = []
+        for i, j in zip(poly, poly[1:] + poly[:1]):
+            key = (min(i, j), max(i, j))
+            if key not in edges:
+                d = vec(points[key[0]], points[key[1]])
+                line = add(f"LINE('',#{pt(points[key[0]])},#{add(f'VECTOR({chr(39) * 2},#{direction(unit(d))},1.)')})")
+                edges[key] = add(f"EDGE_CURVE('',#{verts[key[0]]},#{verts[key[1]]},#{line},.T.)")
+            oes.append(add(f"ORIENTED_EDGE('',*,*,#{edges[key]},{'.T.' if i < j else '.F.'})"))
+        loop = add(f"EDGE_LOOP('',({','.join(f'#{o}' for o in oes)}))")
+        face_ids.append(add(f"ADVANCED_FACE('',(#{add(f'FACE_OUTER_BOUND({chr(39) * 2},#{loop},.T.)')}),#{plane},.T.)"))
+    shell = add(f"CLOSED_SHELL('',({','.join(f'#{f}' for f in face_ids)}))")
+    add(f"MANIFOLD_SOLID_BREP('',#{shell})")
+    return "\n".join(out)
+
+
+class TouchingVertexTest(unittest.TestCase):
+    def test_solids_touching_at_a_point_get_a_vertex_each(self):
+        # two tetrahedra in one shell, touching only at point 0
+        pts = [(0.0, 0.0, 0.0), (1.0, 0.0, 1.0), (0.0, 1.0, 1.0), (1.0, 1.0, 1.0),
+               (1.0, 0.0, -1.0), (0.0, 1.0, -1.0), (1.0, 1.0, -1.0)]
+        upper = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]]
+        lower = [[0, 4, 5], [0, 6, 4], [0, 5, 6], [4, 6, 5]]
+        text, done = clean(_file(_polyhedron(pts, upper + lower)))
+        self.assertEqual(done["touching vertices"], 1)
+        st = _Edit(text)
+        ends = {}
+        for e in st.ent.values():
+            if e.type == "EDGE_CURVE":
+                for v in (e.args[1], e.args[2]):
+                    if self.close(st.vertex(_ref(v)), (0.0, 0.0, 0.0)):
+                        ends.setdefault(_ref(v), 0)
+                        ends[_ref(v)] += 1
+        self.assertEqual(sorted(ends.values()), [3, 3])  # one vertex per tetrahedron
+
+    def test_a_plain_solid_is_left_alone(self):
+        pts = [(0.0, 0.0, 0.0), (1.0, 0.0, 1.0), (0.0, 1.0, 1.0), (1.0, 1.0, 1.0)]
+        _text, done = clean(_file(_polyhedron(pts, [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])))
+        self.assertEqual(done["touching vertices"], 0)
+
+    @staticmethod
+    def close(a, b) -> bool:
+        return math.dist(a, b) < 1e-9
+
+
 class PieceTest(unittest.TestCase):
     def test_a_stretch_of_a_bspline_is_the_same_curve(self):
         pts = ["#%d" % (10 + k) for k in range(6)]

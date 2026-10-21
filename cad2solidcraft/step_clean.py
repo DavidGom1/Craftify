@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from .step_fix import Entity, Step, Vec, _add, _dot, _mul, _norm, _ref, _split_args, _sub, _unit
 
 _ROUND = ("CYLINDRICAL_SURFACE", "CONICAL_SURFACE")
+_TORUS = "TOROIDAL_SURFACE"
 _COMPLEX = re.compile(r"#(\d+)\s*=\s*\((.*)\)\s*;\s*$", re.S)
 SAME_POINT = 1e-6  # mm: a split this close to a vertex uses the vertex
 
@@ -313,6 +314,20 @@ class _Axis:
         return total / (2 * math.pi)
 
 
+def _tube_winding(st: _Edit, surf: Entity, ax: _Axis, loop: _Loop) -> float:
+    """Turns a loop makes round a torus's tube."""
+    major = float(surf.args[2])
+    total, last = 0.0, None
+    for s in loop.steps:
+        for p in s.points:
+            d = _sub(p, ax.o)
+            v = math.atan2(_dot(d, ax.z), math.hypot(_dot(d, ax.x), _dot(d, ax.y)) - major)
+            if last is not None:
+                total += _wrap(v - last)
+            last = v
+    return total / (2 * math.pi)
+
+
 def _crossing(st: _Edit, ax: _Axis, loop: _Loop, theta: float, curves: dict[int, _Curve]):
     """Where the loop passes the angle theta: (step index, vertex id) or (step index, parameter, point)."""
     for k, s in enumerate(loop.steps):
@@ -381,16 +396,32 @@ def _rotated(steps: list[_Step], v: int) -> list[_Step]:
     return steps[k:] + steps[:k]
 
 
+def _meridian(st: _Edit, surf: Entity, ax: _Axis, va: int, vb: int, rising: bool) -> int:
+    """The seam of a torus face that goes round the torus axis: an arc of the tube's circle half a
+    turn from the reference direction, from va to vb, the way the tube angle rises or falls."""
+    major = float(surf.args[2])
+    out = _mul(ax.x, -1.0)  # radial direction half a turn round
+    centre = _add(ax.o, _mul(out, major))
+    # axis y: the circle's own parameter is then the tube angle (y x -x = z)
+    axis = st.add("DIRECTION", ["''", [repr(c) for c in ax.y]])
+    ref = st.add("DIRECTION", ["''", [repr(c) for c in out]])
+    place = st.add("AXIS2_PLACEMENT_3D", ["''", f"#{st.point_entity(centre)}", f"#{axis}", f"#{ref}"])
+    circle = st.add("CIRCLE", ["''", f"#{place}", surf.args[3]])
+    return st.add("EDGE_CURVE", ["''", f"#{va}", f"#{vb}", f"#{circle}", ".T." if rising else ".F."])
+
+
 def _cut_open(st: _Edit, fid: int, curves: dict[int, _Curve]) -> bool:
     face = st.ent[fid]
     surf = st.ent.get(_ref(face.args[2]))
-    if surf is None or surf.type not in _ROUND:
+    if surf is None or surf.type not in _ROUND + (_TORUS,):
         return False
     loops = _loops(st, face, curves)
     if loops is None:
         return False
     ax = _Axis(st, surf)
     round_ = [lp for lp in loops if lp.steps and abs(ax.winding(lp)) > 0.5]
+    if surf.type == _TORUS and (len(round_) != 2 or any(abs(_tube_winding(st, surf, ax, lp)) > 0.5 for lp in round_)):
+        return False  # only rings round the torus axis (fillets), not loops round the tube
     poles = [lp for lp in loops if lp.pole is not None]
     if len(round_) == 2:
         a, b = round_
@@ -420,7 +451,13 @@ def _cut_open(st: _Edit, fid: int, curves: dict[int, _Curve]) -> bool:
     face = st.ent[fid]
     va, vb = ends
 
-    seam = _seam(st, va, vb)
+    if surf.type == _TORUS:
+        # The face lies left of its loops seen from its normal: on the torus that is the side of
+        # rising tube angle for the loop that goes round the axis the positive way.
+        a_positive = ax.winding(a) > 0
+        seam = _meridian(st, surf, ax, va, vb, a_positive == (face.args[3] == ".T."))
+    else:
+        seam = _seam(st, va, vb)
     items = []
     for s in _rotated(a.steps, va):
         items.append(st.add("ORIENTED_EDGE", ["''", "*", "*", f"#{s.edge}", ".T." if s.forward else ".F."]))
@@ -534,6 +571,51 @@ def _trim(st: _Edit, ec_id: int, curves: dict[int, _Curve]) -> bool:
     return True
 
 
+# --------------------------------------------------------------------------- touching vertices
+
+def _split_fans(st: _Edit) -> int:
+    """Give each fan of faces round a vertex its own vertex.
+
+    Where two parts of a solid touch at a point or along a line, the source CAD keeps one vertex
+    with two separate fans of faces round it (and two edges along the line). SolidCraft then
+    takes the solid for open; a vertex per fan, at the same point, is the manifold way to say it."""
+    corners: dict[int, list[tuple[int, int]]] = {}  # vertex -> (edge in, edge out) at each corner
+    for e in list(st.ent.values()):
+        if e.type != "EDGE_LOOP":
+            continue
+        oes = [st.ent[_ref(o)] for o in e.args[1]]
+        for i, cur in enumerate(oes):
+            nxt = oes[(i + 1) % len(oes)]
+            edge = st.ent[_ref(cur.args[3])]
+            v = _ref(edge.args[2] if cur.args[4] == ".T." else edge.args[1])
+            corners.setdefault(v, []).append((_ref(cur.args[3]), _ref(nxt.args[3])))
+    done = 0
+    for v, pairs in corners.items():
+        links: dict[int, set[int]] = {}
+        for a, b in pairs:
+            links.setdefault(a, set()).add(b)
+            links.setdefault(b, set()).add(a)
+        fans, seen = [], set()
+        for start in links:
+            if start in seen:
+                continue
+            fan, todo = set(), [start]
+            while todo:
+                x = todo.pop()
+                if x not in fan:
+                    fan.add(x)
+                    todo += links[x]
+            seen |= fan
+            fans.append(fan)
+        for fan in fans[1:]:
+            twin = st.add("VERTEX_POINT", ["''", f"#{st.point_entity(st.vertex(v))}"])
+            for ec in fan:
+                e = st.ent[ec]
+                st.set(ec, [e.args[0]] + [f"#{twin}" if a == f"#{v}" else a for a in e.args[1:3]] + e.args[3:])
+            done += 1
+    return done
+
+
 # --------------------------------------------------------------------------- outer shells
 
 def _shell_size(st: _Edit, shell: int, curves: dict[int, _Curve]) -> float:
@@ -574,12 +656,16 @@ def clean(text: str, tolerance_mm: float = 1e-3) -> tuple[str, dict[str, int]]:
     """The STEP text as Fusion's export would write it, and how many faces and edges changed."""
     st = _Edit(text)
     curves: dict[int, _Curve] = {}
-    done = {"outer shells": 0, "seams": 0, "trimmed": 0}
+    done = {"outer shells": 0, "touching vertices": 0, "seams": 0, "trimmed": 0}
     for brep in [i for i, e in st.ent.items() if e.type == "BREP_WITH_VOIDS"]:
         try:
             done["outer shells"] += _outer_shell(st, brep, curves)
         except (KeyError, ValueError, IndexError):
             continue
+    try:
+        done["touching vertices"] = _split_fans(st)
+    except (KeyError, ValueError, IndexError):
+        pass
     for fid in [i for i, e in st.ent.items() if e.type == "ADVANCED_FACE"]:
         try:
             done["seams"] += _cut_open(st, fid, curves)

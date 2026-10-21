@@ -8,6 +8,7 @@ from dataclasses import dataclass
 _REF = re.compile(r"#(\d+)")
 _HEAD = re.compile(r"\s*#(\d+)\s*=\s*(\(?\s*[A-Z_0-9]+)")
 _SOLIDS = ("MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS", "SHELL_BASED_SURFACE_MODEL")  # every body, surfaces too
+_STYLES = ("STYLED_ITEM", "OVER_RIDING_STYLED_ITEM")
 
 
 @dataclass
@@ -70,29 +71,30 @@ class StepFile:
         return tuple(float(m.group(k)) for k in (1, 2, 3)) if m else None
 
     def keep_only(self, keep: set[int]) -> str:
-        """The file with every other solid (and what only it used) taken out."""
+        """The file with every other body, and what only it used, taken out. Styles of what goes
+        go too (a face colour would otherwise keep the face of another body in the file)."""
         drop = {s.id for s in self.solids()} - keep
-        referenced = {r for refs in self.refs.values() for r in refs}
-        roots = [e for e in self.refs if e not in referenced]
+        kept = self._reach(list(keep), set())
+        gone = self._reach(list(drop), kept) | drop  # used by the dropped bodies only
+        dead = {e for e, k in self.kind.items()
+                if k in _STYLES and any(r in gone for r in self.refs[e])}
+        remove = gone | dead
         statements = list(self.statements)
-        dead: set[int] = set()
         for eid, refs in self.refs.items():
-            hit = drop.intersection(refs)
-            if not hit or eid in drop:
+            if eid in remove:
                 continue
-            st = statements[self.line_of[eid]]
-            if self.kind[eid] in ("STYLED_ITEM", "OVER_RIDING_STYLED_ITEM") or "SHAPE_REPRESENTATION" not in self.kind[eid] and "REPRESENTATION" not in self.kind[eid]:
-                # a style or other single-target link to a removed solid goes with it
-                if any(f"#{d}" in st.split("(", 1)[1] for d in hit) and self.kind[eid] in ("STYLED_ITEM", "OVER_RIDING_STYLED_ITEM", "PRESENTATION_LAYER_ASSIGNMENT"):
-                    dead.add(eid)
-                    continue
-            for d in hit:  # remove the solid from item lists
-                st = re.sub(rf"#{d}\s*,\s*", "", st)
-                st = re.sub(rf",\s*#{d}(?=\s*[),])", "", st)
-            statements[self.line_of[eid]] = st
-        live = self._reach([r for r in roots if r not in dead], drop | dead)
+            hit = remove.intersection(refs)
+            if hit:
+                st = statements[self.line_of[eid]]
+                for d in hit:  # out of item lists
+                    st = re.sub(rf"(?<=\()\s*#{d}\s*(?:,\s*)?(?=[#)])", "", st)
+                    st = re.sub(rf",\s*#{d}(?=\s*[),])", "", st)
+                statements[self.line_of[eid]] = st
+        referenced = {r for refs in self.refs.values() for r in refs}
+        roots = [e for e in self.refs if e not in referenced and e not in remove]
+        live = self._reach(roots, remove)
         out = []
-        for k, st in enumerate(statements):
+        for st in statements:
             m = _HEAD.match(st)
             if m and int(m.group(1)) not in live:
                 continue
