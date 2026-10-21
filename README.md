@@ -1,103 +1,107 @@
 # Craftify
 
-Craftify convierte ensamblajes y piezas de SolidWorks, y diseños de Fusion, en diseños de
-[SolidCraft](https://github.com/tangency-labs/solidcraft), y comprueba cada pieza contra el
-original. Está escrito en Rust, con una ventana en **egui** (la misma biblioteca que SolidCraft)
-y el aspecto de SolidCraft: colores, tamaños, tipografía IBM Plex y modo claro y oscuro copiados
-de SolidCraft 0.18 (ver `NOTICE.md`).
+Craftify converts SolidWorks assemblies and parts, and Fusion designs, into
+[SolidCraft](https://github.com/tangency-labs/solidcraft) designs, and checks every part against
+the original. It is written in Rust, with a window in **egui** (the same library SolidCraft
+uses) and SolidCraft's look: its colours, sizes, IBM Plex typeface and light and dark themes,
+copied from SolidCraft 0.18 (see `NOTICE.md`).
 
-Herramienta interna de Hidroconta. **No forma parte de SolidCraft ni se envía a su
-repositorio**: las reglas de SolidCraft prohíben automatizar o extraer datos de productos CAD
-comerciales en sus contribuciones.
+An internal Hidroconta tool. **It is not part of SolidCraft and is not contributed to its
+repository**: SolidCraft's rules forbid automating or extracting data from commercial CAD
+products in its contributions.
 
-La primera versión de Craftify estaba en Python (paquete `cad2solidcraft`); sigue en el
-historial de git hasta el commit `e346a53`. Esta versión hace lo mismo y da los mismos
-resultados (ver «Comprobado contra Python»).
+The first version of Craftify was written in Python (package `cad2solidcraft`); it remains in
+the git history up to commit `e346a53`. This version does the same and gives the same results
+(see "Tests").
 
-## Qué hace
+The window and the messages it shows are in Spanish, for the people who use it.
 
-- **SolidWorks** (`.SLDASM`, `.SLDPRT`): convierte cada pieza en su propio diseño, con su
-  geometría exacta (STEP de cadmpeg) corregida con la malla que el propio SolidWorks guarda en
-  el fichero, y de pie (SolidWorks usa Y como vertical; SolidCraft, Z). El ensamblaje enlaza esos
-  diseños, una ocurrencia por instancia. Cada pieza se compara en volumen y caja con esa malla.
-- **Fusion** (`.f3d`, `.f3z`), sin tener Fusion: lee los componentes, ocurrencias y cuerpos del
-  fichero, cadmpeg escribe la geometría, y el STEP se separa por componente y se limpia como lo
-  exporta Fusion (costuras, curvas recortadas, abanicos de caras, tolerancia). En un `.f3z`, las
-  referencias externas se convierten desde su propio documento. Cada pieza se compara con las
-  cajas que guarda Fusion.
-- Deja la vista previa del original, una imagen del resultado y un `report.json`.
+## What it does
 
-## Código
+- **SolidWorks** (`.SLDASM`, `.SLDPRT`): every part becomes its own design, with its exact
+  geometry (a STEP file from cadmpeg) repaired against the display mesh SolidWorks saves in the
+  file, and turned upright (SolidWorks uses Y as up; SolidCraft, Z). The assembly links those
+  designs, one occurrence per instance. Each part is compared with that mesh by volume and
+  bounding box.
+- **Fusion** (`.f3d`, `.f3z`), without Fusion installed: the components, occurrences and bodies
+  are read from the file, cadmpeg writes the geometry, and the STEP file is split per component
+  and tidied the way Fusion's own export writes it (seams, trimmed curves, fans of faces round a
+  vertex, model tolerance). In a `.f3z`, external references are converted from their own
+  document. Each part is compared with the boxes Fusion caches for its bodies.
+- It keeps the original's preview picture, a picture of the result and a `report.json`.
 
-| Carpeta | Qué hace |
+## Code
+
+| Folder | What it holds |
 |---|---|
-| `src/sw/` | contenedor de SolidWorks, ensamblajes, malla de `cadmpeg dump`, conversión |
-| `src/step/` | lector de STEP, correcciones de orientación (`fix`, `mesh_fix`), separación por cuerpos (`split`) y limpieza al estilo de Fusion (`clean`, `edit`) |
-| `src/fusion/` | lector de `.f3d` (`f3d`), conversión sin Fusion (`offline`), vista previa, y la vía antigua del complemento (`bridge`) |
-| `src/solidcraft/` | scripts de `solidcraft-cli`, colocaciones y ensamblajes |
-| `src/mesh.rs` | volumen, caja y distancia a una malla |
-| `src/pyset.rs` | conjuntos que se recorren en el orden de CPython (para dar los mismos ids que la versión Python) |
-| `src/gui/` | la ventana y el tema de SolidCraft |
-| `fusion_addin/` | complemento de Fusion (Python, corre dentro de Fusion): la vía antigua, solo para comparar |
-| `packaging/cadmpeg/` | parche de cadmpeg para los `.f3d` con referencias externas, y `build.ps1` que lo compila |
+| `src/sw/` | the SolidWorks container, assemblies, the mesh from `cadmpeg dump`, the conversion |
+| `src/step/` | the STEP reader, orientation repairs (`fix`, `mesh_fix`), splitting by body (`split`) and Fusion-style tidying (`clean`, `edit`) |
+| `src/fusion/` | the `.f3d` reader (`f3d`), conversion without Fusion (`offline`), previews, and the older add-in route (`bridge`) |
+| `src/solidcraft/` | `solidcraft-cli` scripts, placements and assemblies |
+| `src/mesh.rs` | volume, bounding box and distance to a mesh |
+| `src/pyset.rs` | sets that iterate in CPython's order (so the ids written match the Python version's) |
+| `src/gui/` | the window and SolidCraft's theme |
+| `fusion_addin/` | Fusion add-in (Python, runs inside Fusion): the older route, kept only to compare results |
+| `packaging/cadmpeg/` | the cadmpeg patch for `.f3d` files with external references, and `build.ps1`, which builds it |
 
-## Requisitos
+## Requirements
 
-| Programa | Para qué |
+| Program | Used for |
 |---|---|
-| Rust (rustup, stable) y VS 2022 Build Tools | compilar |
-| SolidCraft 0.16 o posterior | su `solidcraft-cli` construye los diseños (`winget install bherbruck.SolidCraft`) |
-| cadmpeg parcheado | `packaging/cadmpeg/bin/cadmpeg.exe`; se rehace con `powershell -ExecutionPolicy Bypass -File packaging\cadmpeg\build.ps1` |
+| Rust (rustup, stable) and VS 2022 Build Tools | building |
+| SolidCraft 0.16 or later | its `solidcraft-cli` builds the designs (`winget install bherbruck.SolidCraft`) |
+| patched cadmpeg | `packaging/cadmpeg/bin/cadmpeg.exe`; rebuild it with `powershell -ExecutionPolicy Bypass -File packaging\cadmpeg\build.ps1` |
 
-## Uso
+## Usage
 
 ```bash
 cargo build --release
 ```
 
-- Ventana: `target/release/craftify.exe`.
-- Línea de comandos: `target/release/craftify-cli.exe "C:/ruta/ENSAMBLAJE.SLDASM" --out "C:/ruta/salida"`
-  (`--up z` deja las piezas de SolidWorks sin girar, `--no-picture` no dibuja el resultado).
-- Para repartir: `package.ps1` deja en `dist/Craftify` `Craftify.exe`, `craftify-cli.exe` y
-  `cadmpeg.exe` (unos 93 MB). Los equipos donde se use solo necesitan SolidCraft.
+- Window: `target/release/craftify.exe`.
+- Command line: `target/release/craftify-cli.exe "C:/path/ASSEMBLY.SLDASM" --out "C:/path/output"`
+  (`--up z` keeps SolidWorks parts as they are, `--no-picture` skips the picture of the result).
+- To hand it out: `package.ps1` puts `Craftify.exe`, `craftify-cli.exe` and `cadmpeg.exe` in
+  `dist/Craftify` (about 93 MB). The computers it runs on need only SolidCraft.
 
-La ventana guarda sus opciones en `%APPDATA%\cad2solidcraft\settings.json` y admite variables
-para pruebas automáticas: `CAD2SC_SOURCE`, `CAD2SC_OUT`, `CAD2SC_AUTOSTART`,
-`CAD2SC_DONE_FILE`, y `CRAFTIFY_THEME`, `CRAFTIFY_SCREENSHOT` y `CRAFTIFY_CLOSE` para sacar una
-captura de la ventana.
+The window keeps its choices in `%APPDATA%\cad2solidcraft\settings.json` and reads variables for
+automated checks: `CAD2SC_SOURCE`, `CAD2SC_OUT`, `CAD2SC_AUTOSTART`, `CAD2SC_DONE_FILE`, and
+`CRAFTIFY_THEME`, `CRAFTIFY_SCREENSHOT` and `CRAFTIFY_CLOSE` to save a picture of the window.
 
-Los ficheros de SolidWorks y Fusion son datos de la empresa: no se suben al repositorio
-(`.gitignore`). Los de Fusion de prueba están en `out/test-data/` (ignorado).
+SolidWorks and Fusion files are company data: they are never committed (`.gitignore`). The
+Fusion test files live in `out/test-data/` (ignored).
 
-## Pruebas
+## Tests
 
 ```bash
 cargo test --release
 ```
 
-Comprobado contra Python, antes de retirarlo:
+Checked against the Python version before it was retired:
 
-- SolidWorks (ensamblaje de 15 piezas y 18 instancias): las 6 correcciones de STEP, las reglas y
-  el giro de las 15 piezas dan el mismo texto byte a byte (120 ficheros); la conversión entera da
-  el mismo `report.json` (15 de 15 coinciden con SolidWorks) en unos 50 s frente a 114 s.
-- Fusion (`LTC 10Kg Tool.f3d`, `LTC 10Kg.f3d`, `Dobot CR5A.f3z`, 15 piezas): mismos informes,
-  mismos STEP byte a byte (20 ficheros) y mismos scripts; el Dobot en 707 s frente a 1042 s.
+- SolidWorks (an assembly of 15 parts and 18 instances): the 6 STEP repairs, the rule-based one
+  and the upright turn give the same text byte for byte on all 15 parts (120 files); a whole
+  conversion gives the same `report.json` (15 of 15 parts match SolidWorks) in about 50 s
+  instead of 114 s.
+- Fusion (`LTC 10Kg Tool.f3d`, `LTC 10Kg.f3d`, `Dobot CR5A.f3z`, 15 parts): the same reports,
+  the same STEP files byte for byte (20 files) and the same SolidCraft scripts; the Dobot in
+  707 s instead of 1042 s.
 
-`examples/compare_runs.py` compara dos carpetas de salida (por ejemplo, antes y después de un
-cambio); `examples/golden.rs` aplica las correcciones de STEP a un juego de piezas;
-`examples/pyset_check.*` comprueba el orden de `src/pyset.rs` contra CPython.
+`examples/compare_runs.py` compares two output folders (for instance before and after a change);
+`examples/golden.rs` applies the STEP repairs to a set of parts; `examples/pyset_check.*` checks
+the order of `src/pyset.rs` against CPython.
 
-## Decisiones
+## Decisions
 
-- **cadmpeg va como programa aparte**, no enlazado como biblioteca: así el STEP es exactamente
-  el que da `cadmpeg convert`, con sus avisos, y el parche se aplica compilando cadmpeg.
-- **`solidcraft-cli` va como programa aparte**: SolidCraft no publica su motor como biblioteca y
-  enlazarlo costaría compilar su núcleo entero.
-- La ventana no usa el crate de interfaz de SolidCraft (no está publicado y arrastra el motor):
-  copia su tema.
+- **cadmpeg runs as a separate program**, not linked as a library: the STEP file is then exactly
+  what `cadmpeg convert` writes, with its warnings, and the patch is applied by building cadmpeg.
+- **`solidcraft-cli` runs as a separate program**: SolidCraft does not publish its engine as a
+  library, and linking it would mean building its whole kernel.
+- The window does not use SolidCraft's UI crate (it is not published and pulls in the engine):
+  it copies its theme.
 
-## Lo que falta
+## Not done yet
 
-- La línea temporal (operaciones editables): la versión Python tenía un traductor
-  desconectado; cadmpeg 0.6 decodifica demasiado poco de los croquis de SolidWorks.
-- Subensamblajes, relaciones de posición y configuraciones distintas de la activa.
+- The timeline (editable features): the Python version had an unconnected translator; cadmpeg
+  0.6 decodes too little of SolidWorks sketches.
+- Subassemblies, mates, and configurations other than the active one.
