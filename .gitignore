@@ -11,3 +11,7 @@ __pycache__/
 *.f3z
 /dist/
 /build/
+/packaging/cadmpeg/bin/
+/packaging/cadmpeg/work/
+/packaging/cadmpeg/install/
+/packaging/cadmpeg/target/

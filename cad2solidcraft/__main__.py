@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
                                 description="Convert SolidWorks assemblies and parts, and Fusion designs, into SolidCraft designs.")
     p.add_argument("source", type=Path, help="the .SLDASM, .SLDPRT, .f3d or .f3z file to convert")
     p.add_argument("--out", type=Path, default=Path.cwd() / "out", help="output folder (default: ./out)")
-    p.add_argument("--up", choices=("y", "z"), default="y", help="turn Y-up models upright (y, the default) or keep them as they are (z)")
+    p.add_argument("--up", choices=("y", "z"), default="y", help="SolidWorks: turn Y-up models upright (y, the default) or keep them as they are (z); Fusion designs keep their own axes")
     p.add_argument("--solidcraft-cli", help="path of solidcraft-cli.exe")
     p.add_argument("--cadmpeg", help="path of cadmpeg.exe")
     a = p.parse_args(argv)

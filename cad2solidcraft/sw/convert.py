@@ -69,11 +69,13 @@ class Report:
 
 
 def find_cadmpeg(explicit: str | None = None) -> Path:
-    """cadmpeg: the one shipped beside the packaged app first, then an installed one."""
+    """cadmpeg: the one shipped beside the packaged app first, then the patched build
+    (packaging/cadmpeg/build.ps1), then an installed one."""
     bundled = []
     if getattr(sys, "frozen", False):
         bundled = [str(Path(getattr(sys, "_MEIPASS", "")) / "cadmpeg.exe"), str(Path(sys.executable).parent / "cadmpeg.exe")]
-    for c in (explicit, *bundled, shutil.which("cadmpeg"), str(Path.home() / ".cargo" / "bin" / "cadmpeg.exe")):
+    patched = str(Path(__file__).resolve().parents[2] / "packaging" / "cadmpeg" / "bin" / "cadmpeg.exe")
+    for c in (explicit, *bundled, patched, shutil.which("cadmpeg"), str(Path.home() / ".cargo" / "bin" / "cadmpeg.exe")):
         if c and Path(c).is_file():
             return Path(c)
     raise FileNotFoundError("cadmpeg not found: install it with `cargo install cadmpeg`")

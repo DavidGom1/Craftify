@@ -4,7 +4,8 @@
 
 The result is dist/Craftify/ (one folder with the .exe). It carries Python, the
 window and cadmpeg, so the computers it runs on need only SolidCraft installed.
-Needs: pip install -r requirements.txt pyinstaller flet-desktop, and cadmpeg on this computer.
+Needs: pip install -r requirements.txt pyinstaller flet-desktop, and the patched cadmpeg
+(packaging/cadmpeg/build.ps1).
 """
 
 from __future__ import annotations
@@ -40,12 +41,11 @@ def build() -> Path:
         "--distpath", str(ROOT / "dist"),
         "--add-binary", f"{find_cadmpeg()}{os.pathsep}.",
         "--add-data", f"{icon}{os.pathsep}.",
-        "--add-data", f"{ROOT / 'fusion_addin'}{os.pathsep}fusion_addin",
         "--product-name", NAME,
-        "--file-description", "Convierte ensamblajes y piezas de SolidWorks en diseños de SolidCraft",
+        "--file-description", "Convierte diseños de SolidWorks y Fusion en diseños de SolidCraft",
         "--company-name", "Hidroconta",
-        "--product-version", "0.2.0",
-        "--file-version", "0.2.0.0",
+        "--product-version", "0.3.0",
+        "--file-version", "0.3.0.0",
         "--copyright", "Hidroconta",
         "-y",
         "--", f"--paths={ROOT}", f"--workpath={ROOT / 'build' / 'pyinstaller'}",
@@ -67,7 +67,7 @@ def shortcut(exe: Path) -> Path:
     ps = (
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:LNK); "
         "$s.TargetPath = $env:EXE; $s.WorkingDirectory = $env:DIR; $s.IconLocation = $env:EXE + ',0'; "
-        "$s.Description = 'Convierte ensamblajes y piezas de SolidWorks en diseños de SolidCraft'; $s.Save()"
+        "$s.Description = 'Convierte diseños de SolidWorks y Fusion en diseños de SolidCraft'; $s.Save()"
     )
     env = dict(os.environ, LNK=str(link), EXE=str(exe), DIR=str(exe.parent))
     subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, env=env)

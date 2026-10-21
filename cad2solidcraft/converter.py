@@ -27,9 +27,9 @@ def kind(src: Path) -> str:
 def convert(src: Path, out_root: Path, **kwargs) -> Report:
     ext = src.suffix.lower()
     if ext in FUSION:
-        from .fusion.convert import convert_fusion
+        from .fusion.offline import convert_fusion_offline
 
-        return convert_fusion(src, out_root, **kwargs)
+        return convert_fusion_offline(src, out_root, **kwargs)
     from .sw.convert import convert as convert_sw
 
     return convert_sw(src, out_root, **kwargs)

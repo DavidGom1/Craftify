@@ -17,6 +17,7 @@ from . import settings as prefs
 from .settings import DEFAULT_OUT
 from .sw.assembly import read_assembly
 from .converter import FUSION, SUPPORTED, convert, kind, preview_png
+from .fusion.offline import part_names
 from .sw.convert import PREVIEW_RESULT, PartResult, Report
 
 TITLE = "Craftify"
@@ -99,6 +100,7 @@ class ConverterApp:
         self.rows: dict[str, PartRow] = {}
         self.states: dict[str, str] = {}
         self.stems: list[str] = []
+        self.finished: dict[str, PartResult] = {}  # parts converted so far, by name
         self.selected: str | None = None
         self.running = False
         self.picker = ft.FilePicker()
@@ -148,10 +150,10 @@ class ConverterApp:
         self.src_name = ft.Text("Nada elegido todavía", size=16, weight=ft.FontWeight.W_600, max_lines=2,
                                 overflow=ft.TextOverflow.ELLIPSIS)
         self.src_folder = ft.Text("", size=12, color=MUTED, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
-        self.src_info = ft.Text("SolidWorks: ensamblaje .SLDASM o pieza .SLDPRT. Fusion: diseño .f3d o proyecto .f3z (se abre Fusion para exportarlo)",
+        self.src_info = ft.Text("SolidWorks: ensamblaje .SLDASM o pieza .SLDPRT. Fusion: diseño .f3d o proyecto .f3z (no hace falta tener Fusion)",
                                 size=12, color=MUTED)
         self.out_text = ft.Text(self.out, size=13, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS, tooltip=self.out)
-        self.up_switch = ft.Switch(label="Poner las piezas de pie", value=self.settings.get("up_y", True), on_change=self._remember)
+        self.up_switch = ft.Switch(label="Poner de pie las piezas de SolidWorks", value=self.settings.get("up_y", True), on_change=self._remember)
         self.convert_btn = ft.FilledButton(
             content=ft.Text("Convertir", size=15, weight=ft.FontWeight.W_600), icon=ft.Icons.PLAY_ARROW_ROUNDED,
             on_click=self.start, expand=True, height=52,
@@ -281,6 +283,9 @@ class ConverterApp:
             self._add_row(part.stem)
         state = "error" if not part.ok else ("warn" if part.matches_source is False else "ok")
         self._set_state(part.stem, state)
+        self.finished[part.stem] = part
+        if part.stem == self.selected:
+            self._show_notes(part.stem)
         c = self.rows[part.stem].cells
         c[2].content = ft.Text(f"{part.volume_mm3 / 1000:.2f} cm³" if part.volume_mm3 is not None else "—", size=13)
         c[3].content = ft.Text(f"{part.source_volume_mm3 / 1000:.2f} cm³" if part.source_volume_mm3 is not None else "—",
@@ -292,12 +297,15 @@ class ConverterApp:
         self.selected = stem
         for s, row in self.rows.items():
             row.box.bgcolor = ft.Colors.with_opacity(0.10, ft.Colors.PRIMARY) if s == stem else None
-        part = next((p for p in (self.report.parts if self.report else []) if p.stem == stem), None)
+        self._show_notes(stem)
+        self.page.update()
+
+    def _show_notes(self, stem: str) -> None:
+        part = self.finished.get(stem)
         if part is None:
             self.notes.value = f"{stem}: todavía no se ha convertido."
         else:
             self.notes.value = f"{part.stem}: " + ("; ".join(part.warnings) if part.warnings else "sin avisos.")
-        self.page.update()
 
     # ------------------------------------------------------------------ choices
     async def pick_source(self, _e=None) -> None:
@@ -323,6 +331,7 @@ class ConverterApp:
         self.list.controls.clear()
         self.rows.clear()
         self.states.clear()
+        self.finished.clear()
         self.summary.value = ""
         src = Path(self.source) if self.source else None
         if src is None or not src.is_file():
@@ -340,8 +349,15 @@ class ConverterApp:
             self.src_info.value = "Pieza suelta"
             self._add_row(src.stem)
         elif src.suffix.lower() in FUSION:
-            self.stems = []
-            self.src_info.value = kind(src) + " · las piezas aparecen al exportarlas desde Fusion"
+            try:
+                self.stems = part_names(src)
+            except Exception as e:
+                self.stems = []
+                self.src_info.value = f"No se puede leer: {e}"
+            else:
+                self.src_info.value = f"{kind(src)} · {len(self.stems)} pieza(s)"
+            for stem in self.stems:
+                self._add_row(stem)
         else:
             try:
                 asm = read_assembly(src)
@@ -402,11 +418,6 @@ class ConverterApp:
 
     def _on_progress(self, stage: str, done: int, total: int, part: PartResult | None) -> None:
         steps = total + 2
-        if stage == "export":
-            self.status.value = "Exportando desde Fusion… (Fusion se abre si no lo está)"
-            self.progress.value = None
-            self.page.update()
-            return
         if stage == "start" and self.stems:
             self._set_state(self.stems[0], "running")
         elif stage == "part" and part is not None:

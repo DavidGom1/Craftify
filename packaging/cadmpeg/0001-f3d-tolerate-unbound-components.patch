@@ -1,0 +1,23 @@
+--- a/src/design/decode/meta.rs
++++ b/src/design/decode/meta.rs
+@@ -260,15 +260,13 @@
+                 uuid_offset,
+             )?;
+         }
+-        if let Some(missing) = component_entities
++        // cad2solidcraft patch: components that carry no context UUID binding (seen on designs
++        // with external references) are left out of the naming spaces instead of failing the
++        // whole decode.
++        let _unbound = component_entities
+             .iter()
+             .filter(|entity| !by_component.contains_key(entity))
+-            .min()
+-        {
+-            return Err(crate::design::text::malformed_design(format_args!(
+-                "Design component {missing} has no context UUID binding"
+-            )));
+-        }
++            .count();
+ 
+         out.extend(by_component.into_values());
+     }
