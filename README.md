@@ -74,7 +74,8 @@ cargo build --release
   `packaging/installer.iss`) and the portable `dist/Craftify-<version>-windows-x64.zip`. The
   computers it runs on need only SolidCraft.
 - To release: set the version in `Cargo.toml`, merge, and push a tag `v<version>`. The
-  `Release` workflow builds both downloads on Windows and publishes them as a GitHub release.
+  `Release` workflow builds both downloads on Windows and publishes them as a GitHub release; a
+  version with a suffix (`0.2.1-beta.1`) is published as a pre-release.
 
 The window keeps its choices in `%APPDATA%\cad2solidcraft\settings.json` and reads variables for
 automated checks: `CAD2SC_SOURCE`, `CAD2SC_OUT`, `CAD2SC_AUTOSTART`, `CAD2SC_DONE_FILE`, and
