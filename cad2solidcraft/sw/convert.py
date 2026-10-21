@@ -24,6 +24,7 @@ from .assembly import Assembly, Instance, read_assembly
 from .container import read_file
 
 Log = Callable[[str], None]
+Progress = Callable[[str, int, int, "PartResult | None"], None]
 
 # SolidWorks stores a placement for row vectors (p' = p R + T); SolidCraft rotates column
 # vectors, so the stored matrix is used transposed.
@@ -231,12 +232,13 @@ def _check_against_source(src: Path, build: Path, cadmpeg: Path, measured: dict,
         )
 
 
-def convert_part(src: Path, stem: str, out: Path, cli: Path, cadmpeg: Path, log: Log, up_y: bool = True) -> PartResult:
+def convert_part(src: Path, stem: str, out: Path, cli: Path, cadmpeg: Path, log: Log, up_y: bool = True,
+                 design_dir: Path | None = None) -> PartResult:
     t0 = time.monotonic()
     res = PartResult(stem=stem, source=str(src))
     build = out / "build"
     step = build / f"{stem}.step"
-    design = out / "parts" / f"{stem}.solidcraft"
+    design = (design_dir or out / "parts") / f"{stem}.solidcraft"
     design.parent.mkdir(parents=True, exist_ok=True)
     build.mkdir(parents=True, exist_ok=True)
     try:
@@ -341,7 +343,14 @@ PREVIEW_RESULT = "preview_solidcraft.png"
 
 
 def convert_assembly(src: Path, out_root: Path, up_y: bool = True, cli: str | None = None,
-                     cadmpeg: str | None = None, log: Log = print, picture: bool = True) -> Report:
+                     cadmpeg: str | None = None, log: Log = print, picture: bool = True,
+                     progress: Progress | None = None) -> Report:
+    """Convert an assembly. ``progress(stage, done, total, part)`` reports each step:
+    stage is "start", "part", "assembly", "picture" or "done"."""
+    def tell(stage: str, done: int, total: int, part: "PartResult | None" = None) -> None:
+        if progress is not None:
+            progress(stage, done, total, part)
+
     t0 = time.monotonic()
     cli_path = sc.find_cli(cli)
     cad_path = find_cadmpeg(cadmpeg)
@@ -350,22 +359,25 @@ def convert_assembly(src: Path, out_root: Path, up_y: bool = True, cli: str | No
     out.mkdir(parents=True, exist_ok=True)
     report = Report(source=str(src), instances=len(asm.instances), warnings=list(asm.warnings))
     log(f"{asm.name}: {len(asm.instances)} instancias")
+    stems = list(dict.fromkeys(i.stem for i in asm.instances))
+    tell("start", 0, len(stems))
 
     part_designs: dict[str, Path] = {}
-    for stem in dict.fromkeys(i.stem for i in asm.instances):
+    for n, stem in enumerate(stems, 1):
         ref = resolve_reference(asm, stem, [src.parent])
         if ref is None:
-            report.parts.append(PartResult(stem=stem, source=None, warnings=["no se encuentra el fichero"]))
+            r = PartResult(stem=stem, source=None, warnings=["no se encuentra el fichero"])
             log(f"  ERR {stem}: no se encuentra el fichero")
-            continue
-        if ref.suffix.lower() == ".sldasm":
-            report.parts.append(PartResult(stem=stem, source=str(ref), warnings=["los subensamblajes aún no se convierten"]))
+        elif ref.suffix.lower() == ".sldasm":
+            r = PartResult(stem=stem, source=str(ref), warnings=["los subensamblajes aún no se convierten"])
             log(f"  ERR {stem}: los subensamblajes aún no se convierten")
-            continue
-        r = convert_part(ref, stem, out, cli_path, cad_path, log, up_y)
+        else:
+            r = convert_part(ref, stem, out, cli_path, cad_path, log, up_y)
+            if r.ok and r.design:
+                part_designs[stem] = Path(r.design)
         report.parts.append(r)
-        if r.ok and r.design:
-            part_designs[stem] = Path(r.design)
+        tell("part", n, len(stems), r)
+    tell("assembly", len(stems), len(stems))
 
     design = out / f"{asm.name}.solidcraft"
     s, placed, _mapping = assembly_script(asm, part_designs, design, up_y)
@@ -377,6 +389,7 @@ def convert_assembly(src: Path, out_root: Path, up_y: bool = True, cli: str | No
         report.warnings.append(f"ensamblaje: {e}")
     _save_preview(src, out / PREVIEW_SOURCE)
     if picture and report.output:
+        tell("picture", len(stems), len(stems))
         log("Dibujando una imagen del resultado…")
         try:
             sc.snapshot(cli_path, design, out / PREVIEW_RESULT, view="iso", width=800, height=600)
@@ -386,6 +399,63 @@ def convert_assembly(src: Path, out_root: Path, up_y: bool = True, cli: str | No
     (out / "report.json").write_text(json.dumps(asdict(report), indent=1, ensure_ascii=False), encoding="utf-8")
     log(f"{'Terminado' if report.ok() else 'Terminado con avisos'}: {report.output} ({report.seconds} s)")
     return report
+
+
+def convert_single_part(src: Path, out_root: Path, up_y: bool = True, cli: str | None = None,
+                        cadmpeg: str | None = None, log: Log = print, picture: bool = True,
+                        progress: Progress | None = None) -> Report:
+    """Convert one part (.SLDPRT) into its own SolidCraft design."""
+    t0 = time.monotonic()
+    cli_path = sc.find_cli(cli)
+    cad_path = find_cadmpeg(cadmpeg)
+    out = out_root / src.stem
+    out.mkdir(parents=True, exist_ok=True)
+    report = Report(source=str(src), instances=1)
+    log(f"{src.stem}: pieza suelta")
+    if progress:
+        progress("start", 0, 1, None)
+    r = convert_part(src, src.stem, out, cli_path, cad_path, log, up_y, design_dir=out)
+    report.parts.append(r)
+    if progress:
+        progress("part", 1, 1, r)
+    if r.ok and r.design:
+        report.output = r.design
+        report.placed = 1
+    _save_preview(src, out / PREVIEW_SOURCE)
+    if picture and report.output:
+        if progress:
+            progress("picture", 1, 1, None)
+        log("Dibujando una imagen del resultado…")
+        try:
+            sc.snapshot(cli_path, Path(report.output), out / PREVIEW_RESULT, view="iso", width=800, height=600)
+        except Exception as e:
+            report.warnings.append(f"imagen: {e}")
+    report.seconds = round(time.monotonic() - t0, 1)
+    (out / "report.json").write_text(json.dumps(asdict(report), indent=1, ensure_ascii=False), encoding="utf-8")
+    log(f"{'Terminado' if report.ok() else 'Terminado con avisos'}: {report.output} ({report.seconds} s)")
+    return report
+
+
+SUPPORTED = (".sldasm", ".sldprt")
+
+
+def convert(src: Path, out_root: Path, **kwargs) -> Report:
+    """Convert an assembly or a single part, by its extension."""
+    if src.suffix.lower() == ".sldprt":
+        return convert_single_part(src, out_root, **kwargs)
+    return convert_assembly(src, out_root, **kwargs)
+
+
+def preview_png(src: Path) -> bytes | None:
+    """The preview picture SolidWorks saved inside a part or assembly file, as PNG bytes."""
+    try:
+        blocks = read_file(src)
+    except Exception:
+        return None
+    for b in reversed(blocks):
+        if b.name == "PreviewPNG" and b.data and b.data.startswith(b"\x89PNG"):
+            return b.data
+    return None
 
 
 def _save_preview(src: Path, png: Path) -> None:
