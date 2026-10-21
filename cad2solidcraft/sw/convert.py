@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -68,7 +69,11 @@ class Report:
 
 
 def find_cadmpeg(explicit: str | None = None) -> Path:
-    for c in (explicit, shutil.which("cadmpeg"), str(Path.home() / ".cargo" / "bin" / "cadmpeg.exe")):
+    """cadmpeg: the one shipped beside the packaged app first, then an installed one."""
+    bundled = []
+    if getattr(sys, "frozen", False):
+        bundled = [str(Path(getattr(sys, "_MEIPASS", "")) / "cadmpeg.exe"), str(Path(sys.executable).parent / "cadmpeg.exe")]
+    for c in (explicit, *bundled, shutil.which("cadmpeg"), str(Path.home() / ".cargo" / "bin" / "cadmpeg.exe")):
         if c and Path(c).is_file():
             return Path(c)
     raise FileNotFoundError("cadmpeg not found: install it with `cargo install cadmpeg`")

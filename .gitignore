@@ -9,3 +9,5 @@ __pycache__/
 *.sldasm
 *.f3d
 *.f3z
+/dist/
+/build/

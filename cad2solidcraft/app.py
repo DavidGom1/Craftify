@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +19,14 @@ from .sw.assembly import read_assembly
 from .sw.convert import PREVIEW_RESULT, SUPPORTED, PartResult, Report, convert, preview_png
 
 TITLE = "Convertir a SolidCraft"
+
+
+def _icon() -> Path | None:
+    """The window icon: inside the packaged app, or in packaging/ when run from the sources."""
+    for base in (Path(getattr(sys, "_MEIPASS", "")), Path(__file__).resolve().parent.parent / "packaging"):
+        if (base / "icon.ico").is_file():
+            return base / "icon.ico"
+    return None
 SEED = ft.Colors.INDIGO
 MUTED = ft.Colors.ON_SURFACE_VARIANT
 
@@ -95,6 +104,9 @@ class ConverterApp:
         page.services.append(self.picker)
 
         page.title = TITLE
+        icon = _icon()
+        if icon is not None:
+            page.window.icon = str(icon)
         page.theme = ft.Theme(color_scheme_seed=SEED)
         page.dark_theme = ft.Theme(color_scheme_seed=SEED)
         page.theme_mode = {"light": ft.ThemeMode.LIGHT, "dark": ft.ThemeMode.DARK}.get(self.settings.get("theme"), ft.ThemeMode.SYSTEM)
