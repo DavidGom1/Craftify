@@ -141,19 +141,25 @@ fn doubles(buf: &[u8], at: usize, n: usize) -> Vec<f64> {
 fn placement(buf: &[u8], at: usize, by_start: &HashMap<usize, &CString>) -> Option<([f64; 9], [f64; 3], String, bool)> {
     if at + 13 * 8 <= buf.len() {
         let v = doubles(buf, at, 13);
-        if v.iter().all(|x| x.is_finite()) && is_rotation(&v[..9]) && (v[12] - 1.0).abs() < 1e-9
-            && let Some(cfg) = by_start.get(&(at + FULL_TO_CONFIG)) {
-                let mut r = [0.0; 9];
-                r.copy_from_slice(&v[..9]);
-                return Some((r, [v[9], v[10], v[11]], cfg.text.clone(), true));
-            }
+        if v.iter().all(|x| x.is_finite())
+            && is_rotation(&v[..9])
+            && (v[12] - 1.0).abs() < 1e-9
+            && let Some(cfg) = by_start.get(&(at + FULL_TO_CONFIG))
+        {
+            let mut r = [0.0; 9];
+            r.copy_from_slice(&v[..9]);
+            return Some((r, [v[9], v[10], v[11]], cfg.text.clone(), true));
+        }
     }
     if at + 4 * 8 <= buf.len() {
         let v = doubles(buf, at, 4);
-        if v.iter().all(|x| x.is_finite()) && (v[3] - 1.0).abs() < 1e-9 && v[..3].iter().all(|x| x.abs() < 1e4)
-            && let Some(cfg) = by_start.get(&(at + SHORT_TO_CONFIG)) {
-                return Some((IDENTITY, [v[0], v[1], v[2]], cfg.text.clone(), false));
-            }
+        if v.iter().all(|x| x.is_finite())
+            && (v[3] - 1.0).abs() < 1e-9
+            && v[..3].iter().all(|x| x.abs() < 1e4)
+            && let Some(cfg) = by_start.get(&(at + SHORT_TO_CONFIG))
+        {
+            return Some((IDENTITY, [v[0], v[1], v[2]], cfg.text.clone(), false));
+        }
     }
     None
 }

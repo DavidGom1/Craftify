@@ -100,9 +100,8 @@ enum Net {
 }
 
 fn bspline_net(st: &Step, surf: &Entity) -> Net {
-    let grid: Result<Vec<Vec<V>>> = (|| {
-        surf.a(3)?.list()?.iter().map(|row| row.list()?.iter().map(|r| st.point(r.r()?)).collect()).collect()
-    })();
+    let grid: Result<Vec<Vec<V>>> =
+        (|| surf.a(3)?.list()?.iter().map(|row| row.list()?.iter().map(|r| st.point(r.r()?)).collect()).collect())();
     grid.map_or(Net::Unreadable, Net::Grid)
 }
 
@@ -249,10 +248,11 @@ fn loop_extent(st: &Step, bound: &Entity) -> Result<f64> {
         let ec = st.e(st.e(oe.r()?)?.a(3)?.r()?)?;
         pts.push(st.vertex(ec.a(1)?.r()?)?);
         if let Some(c) = st.curve(ec.a(3)?.r()?)?
-            && (c.ty == "CIRCLE" || c.ty == "ELLIPSE") {
-                let d = 2.0 * c.a(2)?.f()?;
-                return Ok(if edges.py_len() == 1 { d } else { d.max(0.0) });
-            }
+            && (c.ty == "CIRCLE" || c.ty == "ELLIPSE")
+        {
+            let d = 2.0 * c.a(2)?.f()?;
+            return Ok(if edges.py_len() == 1 { d } else { d.max(0.0) });
+        }
     }
     if pts.len() < 2 {
         return Ok(0.0);
@@ -312,9 +312,10 @@ pub fn repair_text(text: &str, mesh: &Mesh, o: Options) -> Result<(String, MeshF
                 continue;
             }
             if let Some(g) = geometric_edge_sense(&st, &st.ent[&id])?
-                && st.set_last_flag(id, g)? {
-                    fix.curve_edges += 1;
-                }
+                && st.set_last_flag(id, g)?
+            {
+                fix.curve_edges += 1;
+            }
         }
     }
 

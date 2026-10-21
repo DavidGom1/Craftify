@@ -93,7 +93,13 @@ pub fn div(a: f64, b: f64) -> Result<f64> {
 /// Python's float `%` for a positive divisor.
 pub fn py_mod(x: f64, y: f64) -> f64 {
     let r = x % y;
-    if r != 0.0 && (r < 0.0) != (y < 0.0) { r + y } else if r == 0.0 { 0.0_f64.copysign(y) } else { r }
+    if r != 0.0 && (r < 0.0) != (y < 0.0) {
+        r + y
+    } else if r == 0.0 {
+        0.0_f64.copysign(y)
+    } else {
+        r
+    }
 }
 
 /// A STEP parameter: a token as written, or a nested list.
@@ -254,8 +260,7 @@ pub fn split_args(text: &str) -> Result<Vec<Arg>> {
     Ok(stack.pop().unwrap_or_default())
 }
 
-static ENTITY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)#(\d+)\s*=\s*([A-Z_0-9]+)\s*\((.*)\)\s*;\s*$").expect("entity pattern"));
+static ENTITY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)#(\d+)\s*=\s*([A-Z_0-9]+)\s*\((.*)\)\s*;\s*$").expect("entity pattern"));
 static LAST_FLAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r",\s*\.[TF]\.\s*\)\s*;$").expect("flag pattern"));
 
 pub struct Step {
@@ -431,9 +436,10 @@ impl Step {
         let rest = stmt[body.len()..].to_owned();
         self.statements[line] = new_body + &rest;
         if let Some(e) = self.ent.get_mut(&id)
-            && let Some(a) = e.args.last_mut() {
-                *a = Arg::S(flag.to_owned());
-            }
+            && let Some(a) = e.args.last_mut()
+        {
+            *a = Arg::S(flag.to_owned());
+        }
         Ok(true)
     }
 

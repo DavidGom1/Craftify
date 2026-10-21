@@ -12,9 +12,8 @@ use super::{PyKind, py_err};
 
 pub static REF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#(\d+)").expect("ref pattern"));
 static HEAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*#(\d+)\s*=\s*(\(?\s*[A-Z_0-9]+)").expect("head pattern"));
-static POINT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\(\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*\)").expect("point pattern")
-});
+static POINT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*\)").expect("point pattern"));
 /// Every body, surfaces too.
 const SOLIDS: [&str; 3] = ["MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS", "SHELL_BASED_SURFACE_MODEL"];
 const STYLES: [&str; 2] = ["STYLED_ITEM", "OVER_RIDING_STYLED_ITEM"];
@@ -93,12 +92,11 @@ impl StepFile {
     fn vertex_box(&self, solid: i64) -> Result<Option<Box3>> {
         let mut pts = Vec::new();
         for e in self.reach(&[solid], &HashSet::new()) {
-            if self.kind.get(&e).map(String::as_str) == Some("VERTEX_POINT") {
-                if let Some(&first) = self.refs.get(&e).and_then(|r| r.first()) {
-                    if let Some(p) = self.point(first)? {
-                        pts.push(p);
-                    }
-                }
+            if self.kind.get(&e).map(String::as_str) == Some("VERTEX_POINT")
+                && let Some(&first) = self.refs.get(&e).and_then(|r| r.first())
+                && let Some(p) = self.point(first)?
+            {
+                pts.push(p);
             }
         }
         let Some(first) = pts.first() else { return Ok(None) };
@@ -119,7 +117,8 @@ impl StepFile {
     fn point(&self, eid: i64) -> Result<Option<[f64; 3]>> {
         let line = *self.line_of.get(&eid).ok_or_else(|| py_err(PyKind::Key, eid.to_string()))?;
         let Some(m) = POINT.captures(&self.statements[line]) else { return Ok(None) };
-        let f = |k: usize| m[k].parse::<f64>().map_err(|_| py_err(PyKind::Value, format!("could not convert string to float: '{}'", &m[k])));
+        let f =
+            |k: usize| m[k].parse::<f64>().map_err(|_| py_err(PyKind::Value, format!("could not convert string to float: '{}'", &m[k])));
         Ok(Some([f(1)?, f(2)?, f(3)?]))
     }
 

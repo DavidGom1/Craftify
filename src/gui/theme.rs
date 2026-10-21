@@ -121,12 +121,7 @@ impl Tokens {
             control_border: Color32::from_rgb(195, 203, 214),
             selected_ink: Color32::from_rgb(26, 80, 127),
             selected_bg: Color32::from_rgb(232, 241, 250),
-            logo: [
-                Color32::from_rgb(96, 158, 236),
-                Color32::from_rgb(58, 136, 238),
-                Color32::from_rgb(55, 108, 197),
-                Color32::WHITE,
-            ],
+            logo: [Color32::from_rgb(96, 158, 236), Color32::from_rgb(58, 136, 238), Color32::from_rgb(55, 108, 197), Color32::WHITE],
         }
     }
 

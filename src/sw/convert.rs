@@ -48,9 +48,7 @@ pub fn find_cadmpeg(explicit: Option<&str>) -> Result<PathBuf> {
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         c.push(PathBuf::from(home).join(".cargo").join("bin").join("cadmpeg.exe"));
     }
-    c.into_iter()
-        .find(|p| p.is_file())
-        .ok_or_else(|| anyhow!("cadmpeg not found: install it with `cargo install cadmpeg`"))
+    c.into_iter().find(|p| p.is_file()).ok_or_else(|| anyhow!("cadmpeg not found: install it with `cargo install cadmpeg`"))
 }
 
 /// Find the file an instance refers to, as SolidWorks does: by its file name.
@@ -108,9 +106,9 @@ fn run_cadmpeg(cadmpeg: &Path, src: &Path, step: &Path) -> Result<Vec<String>> {
     let mut keep = Vec::new();
     for n in notes {
         let low = n.to_lowercase();
-        if low.contains("[warning/geometry]") && !low.contains("tessellation(s) require") {
-            keep.push(n.trim().to_owned());
-        } else if low.starts_with("check:") && !low.contains("0 error(s)") {
+        let geometry = low.contains("[warning/geometry]") && !low.contains("tessellation(s) require");
+        let check = low.starts_with("check:") && !low.contains("0 error(s)");
+        if geometry || check {
             keep.push(n.trim().to_owned());
         }
     }
@@ -292,10 +290,7 @@ pub fn convert_part(
         let mut script = Script::default();
         script.add("file.new", json!({ "name": stem }));
         script.add("file.insert_step", json!({ "path": s(&step) }));
-        script.add(
-            "document.metadata.set",
-            json!({"key": METADATA_KEY, "value": {"source": s(src), "source_cad": "SolidWorks"}}),
-        );
+        script.add("document.metadata.set", json!({"key": METADATA_KEY, "value": {"source": s(src), "source_cad": "SolidWorks"}}));
         script.add("file.save_as", json!({ "path": s(&design) }));
         sc::run(cli, &script.write(&build.join(format!("{stem}.part.json")))?)?;
         let measured = sc::evaluate(cli, &design)?;
@@ -393,14 +388,13 @@ pub struct Tools {
 
 /// The result picture and report every conversion ends with.
 pub fn finish(report: &mut Report, out: &Path, cli: &Path, picture: bool, hooks: &Hooks, t0: Instant, done: usize) -> Result<()> {
-    if picture
-        && let Some(output) = report.output.clone() {
-            hooks.tell(Stage::Picture, done, done, None);
-            hooks.log("Dibujando una imagen del resultado…");
-            if let Err(e) = sc::snapshot(cli, Path::new(&output), &out.join(PREVIEW_RESULT), "iso", 800, 600) {
-                report.warnings.push(format!("imagen: {e}"));
-            }
+    if picture && let Some(output) = report.output.clone() {
+        hooks.tell(Stage::Picture, done, done, None);
+        hooks.log("Dibujando una imagen del resultado…");
+        if let Err(e) = sc::snapshot(cli, Path::new(&output), &out.join(PREVIEW_RESULT), "iso", 800, 600) {
+            report.warnings.push(format!("imagen: {e}"));
         }
+    }
     report.seconds = round1(t0.elapsed().as_secs_f64());
     util::write_json(&out.join("report.json"), report)?;
     hooks.log(&report.finished_line());
@@ -439,9 +433,10 @@ pub fn convert_assembly(src: &Path, out_root: &Path, up_y: bool, tools: &Tools, 
             Some(r) => {
                 let r = convert_part(&r, stem, &out, &tools.cli, &tools.cadmpeg, &|l| hooks.log(l), up_y, None);
                 if r.ok
-                    && let Some(d) = &r.design {
-                        part_designs.insert(stem.clone(), PathBuf::from(d));
-                    }
+                    && let Some(d) = &r.design
+                {
+                    part_designs.insert(stem.clone(), PathBuf::from(d));
+                }
                 r
             }
         };
@@ -478,10 +473,11 @@ pub fn convert_single_part(src: &Path, out_root: &Path, up_y: bool, tools: &Tool
     let r = convert_part(src, &stem, &out, &tools.cli, &tools.cadmpeg, &|l| hooks.log(l), up_y, Some(&out));
     hooks.tell(Stage::Part, 1, 1, Some(&r));
     if r.ok
-        && let Some(d) = &r.design {
-            report.output = Some(d.clone());
-            report.placed = 1;
-        }
+        && let Some(d) = &r.design
+    {
+        report.output = Some(d.clone());
+        report.placed = 1;
+    }
     report.parts.push(r);
     save_preview(src, &out.join(PREVIEW_SOURCE))?;
     finish(&mut report, &out, &tools.cli, picture, hooks, t0, 1)?;

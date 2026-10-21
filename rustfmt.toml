@@ -1,0 +1,3 @@
+# Long lines, as the code was written: keeps `cargo fmt` close to the existing style.
+max_width = 140
+use_small_heuristics = "Max"

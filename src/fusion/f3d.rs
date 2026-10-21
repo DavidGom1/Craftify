@@ -81,7 +81,7 @@ impl Reader<'_> {
             return Err(F3dError(format!("string too long at {}", self.pos)).into());
         }
         let b = self.take(2 * n)?;
-        let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
         Ok(String::from_utf16_lossy(&units))
     }
 }
@@ -397,7 +397,8 @@ fn solve_free(s: &Segment, placements: &mut [Placement], free: &[u64], root: Opt
 
 pub fn read_assembly(f: &F3d) -> Result<Assembly> {
     let s = &f.design;
-    let mut spaces: Vec<u64> = s.types.iter().filter(|t| t.base.to_uppercase() == NAMING_SPACE_BASE).flat_map(|t| t.ids.iter().copied()).collect();
+    let mut spaces: Vec<u64> =
+        s.types.iter().filter(|t| t.base.to_uppercase() == NAMING_SPACE_BASE).flat_map(|t| t.ids.iter().copied()).collect();
     spaces.sort_unstable();
     let mut components: IndexMap<u64, Component> = IndexMap::new();
     // A component record is the nearest record before its naming space that carries "Part Number".

@@ -77,11 +77,7 @@ pub fn run(cli: &Path, script_path: &Path) -> Result<Vec<Value>> {
     if results.exists() {
         std::fs::remove_file(&results)?;
     }
-    let out = util::run(
-        cli,
-        &["run", &s(script_path), "--results", "--quiet", "--json-out", &s(&results)],
-        Duration::from_secs(1800),
-    )?;
+    let out = util::run(cli, &["run", &s(script_path), "--results", "--quiet", "--json-out", &s(&results)], Duration::from_secs(1800))?;
     if out.status != Some(0) {
         return Err(failure(&out, format!("solidcraft-cli exited with {}", out.status.unwrap_or(-1))));
     }

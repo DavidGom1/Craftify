@@ -93,8 +93,14 @@ struct Toast {
 }
 
 /// Parts table: (title, flex, numeric).
-const COLUMNS: [(&str, f32, bool); 6] =
-    [("Pieza", 4.0, false), ("Estado", 3.0, false), ("Volumen", 2.0, true), ("Original", 2.0, true), ("Corrección", 3.0, false), ("Tiempo", 1.3, true)];
+const COLUMNS: [(&str, f32, bool); 6] = [
+    ("Pieza", 4.0, false),
+    ("Estado", 3.0, false),
+    ("Volumen", 2.0, true),
+    ("Original", 2.0, true),
+    ("Corrección", 3.0, false),
+    ("Tiempo", 1.3, true),
+];
 
 pub struct App {
     settings: Map<String, Value>,
@@ -150,19 +156,20 @@ impl App {
         let ctx = &cc.egui_ctx;
         fonts::install(ctx);
         let settings = settings::load();
-        let theme_pref = std::env::var("CRAFTIFY_THEME")
-            .ok()
-            .or_else(|| setting_str(&settings, "theme"))
-            .unwrap_or_else(|| "system".into());
+        let theme_pref =
+            std::env::var("CRAFTIFY_THEME").ok().or_else(|| setting_str(&settings, "theme")).unwrap_or_else(|| "system".into());
         let source = std::env::var("CAD2SC_SOURCE").ok().or_else(|| setting_str(&settings, "source")).unwrap_or_default();
-        let out = std::env::var("CAD2SC_OUT")
-            .ok()
-            .or_else(|| setting_str(&settings, "out"))
-            .unwrap_or_else(|| util::s(&settings::default_out()));
+        let out =
+            std::env::var("CAD2SC_OUT").ok().or_else(|| setting_str(&settings, "out")).unwrap_or_else(|| util::s(&settings::default_out()));
         let up_y = settings.get("up_y").and_then(Value::as_bool).unwrap_or(true);
-        let logo = texture(ctx, "logo", ICON_PNG).unwrap_or_else(|| ctx.load_texture("logo", egui::ColorImage::example(), Default::default()));
-        let shot = std::env::var_os("CRAFTIFY_SCREENSHOT")
-            .map(|p| Shot { path: PathBuf::from(p), close: std::env::var_os("CRAFTIFY_CLOSE").is_some(), frames: 0, asked: false });
+        let logo =
+            texture(ctx, "logo", ICON_PNG).unwrap_or_else(|| ctx.load_texture("logo", egui::ColorImage::example(), Default::default()));
+        let shot = std::env::var_os("CRAFTIFY_SCREENSHOT").map(|p| Shot {
+            path: PathBuf::from(p),
+            close: std::env::var_os("CRAFTIFY_CLOSE").is_some(),
+            frames: 0,
+            asked: false,
+        });
         let mut app = App {
             settings,
             theme_pref,
@@ -549,15 +556,28 @@ impl App {
                             }
                             None => {
                                 let text = if note.is_empty() { "Aparecerá al convertir" } else { note };
-                                ui.painter().text(rect.center() - Vec2::new(0.0, 10.0), Align2::CENTER_CENTER, "🖼", egui::FontId::proportional(30.0), t.border);
-                                ui.painter().text(rect.center() + Vec2::new(0.0, 18.0), Align2::CENTER_CENTER, text, egui::FontId::proportional(t.font_body), t.text_dim);
+                                ui.painter().text(
+                                    rect.center() - Vec2::new(0.0, 10.0),
+                                    Align2::CENTER_CENTER,
+                                    "🖼",
+                                    egui::FontId::proportional(30.0),
+                                    t.border,
+                                );
+                                ui.painter().text(
+                                    rect.center() + Vec2::new(0.0, 18.0),
+                                    Align2::CENTER_CENTER,
+                                    text,
+                                    egui::FontId::proportional(t.font_body),
+                                    t.text_dim,
+                                );
                             }
                         }
                     });
                 });
             }
         });
-        let details_h = 46.0 + if ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new("details_open"))).unwrap_or(false) { 170.0 } else { 0.0 };
+        let details_h =
+            46.0 + if ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new("details_open"))).unwrap_or(false) { 170.0 } else { 0.0 };
         let parts_h = (ui.available_height() - details_h - t.space_12).max(180.0);
         ui.allocate_ui(Vec2::new(full, parts_h), |ui| {
             ui.set_min_height(parts_h);
@@ -601,28 +621,35 @@ impl App {
                 });
                 rule(ui, t);
                 let notes_h = 40.0;
-                egui::ScrollArea::vertical().max_height((ui.available_height() - notes_h).max(60.0)).auto_shrink([false, false]).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    if rows.is_empty() {
-                        ui.add_space(t.space_12);
-                        ui.label(RichText::new("Elige un fichero: aquí aparecen sus piezas.").size(t.font_body).color(t.text_dim));
-                    }
-                    for row in rows {
-                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click());
-                        let is_sel = selected.as_deref() == Some(row.stem.as_str());
-                        if is_sel {
-                            ui.painter().rect_filled(rect, t.radius_md, t.selected_bg);
-                        } else if resp.hovered() {
-                            ui.painter().rect_filled(rect, t.radius_md, t.hover);
+                egui::ScrollArea::vertical().max_height((ui.available_height() - notes_h).max(60.0)).auto_shrink([false, false]).show(
+                    ui,
+                    |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        if rows.is_empty() {
+                            ui.add_space(t.space_12);
+                            ui.label(RichText::new("Elige un fichero: aquí aparecen sus piezas.").size(t.font_body).color(t.text_dim));
                         }
-                        if resp.clicked() {
-                            clicked = Some(row.stem.clone());
+                        for row in rows {
+                            let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click());
+                            let is_sel = selected.as_deref() == Some(row.stem.as_str());
+                            if is_sel {
+                                ui.painter().rect_filled(rect, t.radius_md, t.selected_bg);
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(rect, t.radius_md, t.hover);
+                            }
+                            if resp.clicked() {
+                                clicked = Some(row.stem.clone());
+                            }
+                            let mut child = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(rect.shrink2(Vec2::new(12.0, 0.0)))
+                                    .layout(Layout::left_to_right(Align::Center)),
+                            );
+                            child.spacing_mut().item_spacing.x = 0.0;
+                            draw_row(&mut child, t, row, &widths);
                         }
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(Vec2::new(12.0, 0.0))).layout(Layout::left_to_right(Align::Center)));
-                        child.spacing_mut().item_spacing.x = 0.0;
-                        draw_row(&mut child, t, row, &widths);
-                    }
-                });
+                    },
+                );
                 rule(ui, t);
                 let note = match self.selected.as_deref() {
                     None => "Selecciona una pieza para ver sus avisos.".to_owned(),
@@ -651,7 +678,13 @@ impl App {
                 ui.set_width(ui.available_width());
                 let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), Sense::click());
                 let arrow = if open { "⏷" } else { "⏵" };
-                ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, format!("{arrow}   Detalles técnicos"), fonts::semibold(t.font_heading), t.text);
+                ui.painter().text(
+                    rect.left_center(),
+                    Align2::LEFT_CENTER,
+                    format!("{arrow}   Detalles técnicos"),
+                    fonts::semibold(t.font_heading),
+                    t.text,
+                );
                 if resp.clicked() {
                     open = !open;
                 }
@@ -788,12 +821,24 @@ fn button(ui: &mut Ui, t: &Tokens, text: &str, kind: Kind, enabled: bool, size: 
     let (fill, stroke, ink) = match kind {
         Kind::Primary if !enabled => (t.accent.gamma_multiply(0.45), Stroke::NONE, t.on_accent.gamma_multiply(0.8)),
         Kind::Primary => {
-            let fill = if pressed { t.selected_ink } else if hovered { t.accent.gamma_multiply(0.88) } else { t.accent };
+            let fill = if pressed {
+                t.selected_ink
+            } else if hovered {
+                t.accent.gamma_multiply(0.88)
+            } else {
+                t.accent
+            };
             (fill, Stroke::NONE, t.on_accent)
         }
         Kind::Secondary if !enabled => (t.control_fill, Stroke::new(1.0, t.dialog_rule), t.text_dim.gamma_multiply(0.7)),
         Kind::Secondary => {
-            let fill = if pressed { t.accent_soft } else if hovered { t.hover } else { t.control_fill };
+            let fill = if pressed {
+                t.accent_soft
+            } else if hovered {
+                t.hover
+            } else {
+                t.control_fill
+            };
             (fill, Stroke::new(1.0, if hovered { t.accent } else { t.control_border }), t.text)
         }
     };
@@ -840,7 +885,13 @@ fn toggle(ui: &mut Ui, t: &Tokens, on: &mut bool, label: &str) {
     ui.painter().rect_filled(track, 10, fill);
     let knob_x = if *on { track.right() - 10.0 } else { track.left() + 10.0 };
     ui.painter().circle_filled(egui::pos2(knob_x, track.center().y), 7.0, Color32::WHITE);
-    ui.painter().text(track.right_center() + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, label, egui::FontId::proportional(t.font_label), t.text);
+    ui.painter().text(
+        track.right_center() + Vec2::new(10.0, 0.0),
+        Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(t.font_label),
+        t.text,
+    );
     if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
         *on = !*on;
     }
@@ -968,10 +1019,8 @@ impl eframe::App for App {
 
 /// Window options: SolidCraft's renderer, the Python window's size, the Craftify icon.
 pub fn native_options() -> eframe::NativeOptions {
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title(TITLE)
-        .with_inner_size([1320.0, 880.0])
-        .with_min_inner_size([1120.0, 740.0]);
+    let mut viewport =
+        egui::ViewportBuilder::default().with_title(TITLE).with_inner_size([1320.0, 880.0]).with_min_inner_size([1120.0, 740.0]);
     if let Ok(img) = image::load_from_memory(ICON_PNG) {
         let img = img.to_rgba8();
         viewport = viewport.with_icon(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() });

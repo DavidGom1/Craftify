@@ -19,10 +19,7 @@ pub const ADDIN: &str = "Cad2SolidCraftExporter";
 /// The add-in's files, built into the program.
 const ADDIN_FILES: [(&str, &[u8]); 2] = [
     ("Cad2SolidCraftExporter.py", include_bytes!("../../fusion_addin/Cad2SolidCraftExporter/Cad2SolidCraftExporter.py")),
-    (
-        "Cad2SolidCraftExporter.manifest",
-        include_bytes!("../../fusion_addin/Cad2SolidCraftExporter/Cad2SolidCraftExporter.manifest"),
-    ),
+    ("Cad2SolidCraftExporter.manifest", include_bytes!("../../fusion_addin/Cad2SolidCraftExporter/Cad2SolidCraftExporter.manifest")),
 ];
 
 fn env_dir(var: &str) -> PathBuf {
@@ -73,7 +70,7 @@ pub fn find_fusion() -> Option<PathBuf> {
         .filter(|p| p.is_file())
         .filter_map(|p| Some((p.metadata().ok()?.modified().ok()?, p)))
         .collect();
-    launchers.sort_by(|a, b| b.0.cmp(&a.0));
+    launchers.sort_by_key(|a| std::cmp::Reverse(a.0));
     launchers.into_iter().next().map(|(_, p)| p)
 }
 
@@ -111,7 +108,8 @@ pub fn ensure_ready(log: &dyn Fn(&str), timeout: Duration) -> Result<()> {
              o actívalo en Utilidades > Complementos > Cad2SolidCraftExporter."
         );
     }
-    let exe = find_fusion().ok_or_else(|| anyhow!("Fusion no está instalado en este equipo: hace falta para convertir ficheros de Fusion."))?;
+    let exe =
+        find_fusion().ok_or_else(|| anyhow!("Fusion no está instalado en este equipo: hace falta para convertir ficheros de Fusion."))?;
     log("Abriendo Fusion…");
     let mut cmd = Command::new(&exe);
     #[cfg(windows)]

@@ -49,6 +49,8 @@ Source: "..\dist\Craftify\craftify-cli.exe"; DestDir: "{app}"; Flags: ignorevers
 Source: "..\dist\Craftify\cadmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Craftify\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Craftify\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\Craftify\LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\Craftify\LICENSE-APACHE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Craftify\OFL-IBMPlex.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
