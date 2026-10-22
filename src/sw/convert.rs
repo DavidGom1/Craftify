@@ -17,9 +17,9 @@ use super::ir;
 use crate::converter::{Hooks, Stage};
 use crate::mesh::Mesh;
 use crate::report::{PartResult, Report};
-use crate::solidcraft::assembly::add_moves;
+use crate::solidcraft::assembly::{Placement, add_moves, link_parts};
 use crate::solidcraft::script::{self as sc, METADATA_KEY, Measured, Script, is_solidcraft_error};
-use crate::solidcraft::transform::{Matrix, Vec3, Y_UP_TO_Z_UP, apply, conjugate, transpose};
+use crate::solidcraft::transform::{IDENTITY, Matrix, Vec3, Y_UP_TO_Z_UP, apply, conjugate, transpose};
 use crate::step::fix as step_fix;
 use crate::step::mesh_fix::{self, REPAIRS};
 use crate::util::{self, py_repr, read_latin1, round1, s, write_latin1};
@@ -292,6 +292,8 @@ pub fn convert_part(
         script.add("file.insert_step", json!({ "path": s(&step) }));
         script.add("document.metadata.set", json!({"key": METADATA_KEY, "value": {"source": s(src), "source_cad": "SolidWorks"}}));
         script.add("file.save_as", json!({ "path": s(&design) }));
+        // its bodies as SolidCraft holds them: what an assembly brings in
+        script.add("file.export", json!({ "path": s(&design_step(&build, stem)) }));
         sc::run(cli, &script.write(&build.join(format!("{stem}.part.json")))?)?;
         let measured = sc::evaluate(cli, &design)?;
         res.design = Some(s(&design));
@@ -326,17 +328,26 @@ pub fn placement(inst: &Instance, up_y: bool) -> (Matrix, Vec3) {
     (m, t)
 }
 
+/// Where a part's bodies are exported as STEP when its design is made.
+pub fn design_step(build: &Path, stem: &str) -> PathBuf {
+    build.join(format!("{stem}.design.step"))
+}
+
+/// The assembly's script, and its parts as [`link_parts`] takes them: each part comes in from its
+/// exported STEP when there is one in `build` (inserting the design would compute it again).
 pub fn assembly_script(
     asm: &Assembly,
     part_designs: &IndexMap<String, PathBuf>,
     out_design: &Path,
     up_y: bool,
-) -> (Script, usize, IndexMap<String, String>) {
+    build: &Path,
+) -> (Script, usize, Vec<Placement>) {
     let mut sc = Script::default();
     sc.add("file.new", json!({ "name": asm.name }));
     let mut counts: IndexMap<&str, usize> = IndexMap::new();
     let mut mapping: IndexMap<String, String> = IndexMap::new();
     let mut placed = 0;
+    let mut linked: Vec<Placement> = Vec::new();
     // Every occurrence first: a copy takes the current placement of the occurrence it copies,
     // so copies are made while the first occurrence is still at the origin.
     let mut todo: Vec<(&Instance, String)> = Vec::new();
@@ -345,7 +356,20 @@ pub fn assembly_script(
         let n = counts.get(inst.stem.as_str()).copied().unwrap_or(0) + 1;
         counts.insert(&inst.stem, n);
         if n == 1 {
-            sc.add("component.insert_design", json!({"path": s(design), "name": inst.stem}));
+            let step = design_step(build, &inst.stem);
+            if step.is_file() {
+                sc.add("file.insert_step", json!({"path": s(&step), "name": inst.stem}));
+            } else {
+                sc.add("component.insert_design", json!({"path": s(design), "name": inst.stem}));
+            }
+            linked.push(Placement {
+                stem: inst.stem.clone(),
+                design: design.clone(),
+                step: step.is_file().then_some(step),
+                rotation: IDENTITY,
+                translation_mm: [0.0; 3],
+                label: String::new(),
+            });
         } else {
             sc.add("occurrence.copy", json!({ "occurrence": format!("{}:1", inst.stem) }));
         }
@@ -361,7 +385,7 @@ pub fn assembly_script(
     let meta = json!({"source": s(&asm.path), "source_cad": "SolidWorks", "instances": mapping, "up": if up_y { "y" } else { "z" }});
     sc.add("document.metadata.set", json!({"key": METADATA_KEY, "value": meta}));
     sc.add("file.save_as", json!({ "path": s(out_design) }));
-    (sc, placed, mapping)
+    (sc, placed, linked)
 }
 
 /// The preview picture SolidWorks saved inside a part or assembly file, as PNG bytes.
@@ -446,8 +470,13 @@ pub fn convert_assembly(src: &Path, out_root: &Path, up_y: bool, tools: &Tools, 
     hooks.tell(Stage::Assembly, stems.len(), stems.len(), None);
 
     let design = out.join(format!("{}.solidcraft", asm.name));
-    let (script, placed, _mapping) = assembly_script(&asm, &part_designs, &design, up_y);
-    let built = script.write(&out.join("build").join(format!("{}.assembly.json", asm.name))).and_then(|p| sc::run(&tools.cli, &p));
+    let build = out.join("build");
+    let (script, placed, linked) = assembly_script(&asm, &part_designs, &design, up_y, &build);
+    hooks.step(&format!("colocando {placed} instancias"));
+    let built = script
+        .write(&build.join(format!("{}.assembly.json", asm.name)))
+        .and_then(|p| sc::run(&tools.cli, &p))
+        .and_then(|r| link_parts(&design, &linked).map(|_| r));
     match built {
         Ok(_) => {
             report.output = Some(s(&design));

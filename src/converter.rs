@@ -32,21 +32,31 @@ pub enum Stage {
 }
 
 pub type Progress = dyn Fn(Stage, usize, usize, Option<&PartResult>);
+pub type Say = dyn Fn(&str);
 
-/// Where a conversion reports to: its log lines and its progress.
+/// Where a conversion reports to: its log lines, its progress, and what it is doing now within
+/// a part (`step`).
 pub struct Hooks {
-    pub log: Box<dyn Fn(&str)>,
+    pub log: Box<Say>,
     pub progress: Option<Box<Progress>>,
+    pub step: Option<Box<Say>>,
 }
 
 impl Hooks {
-    /// Log lines to the terminal, no progress.
+    /// Log lines and steps to the terminal, no progress.
     pub fn print() -> Hooks {
-        Hooks { log: Box::new(|l| println!("{l}")), progress: None }
+        Hooks { log: Box::new(|l| println!("{l}")), progress: None, step: Some(Box::new(|w| println!("      {w}…"))) }
     }
 
     pub fn log(&self, line: &str) {
         (self.log)(line);
+    }
+
+    /// What the conversion starts doing now, as a few words ("calculando la pieza").
+    pub fn step(&self, what: &str) {
+        if let Some(s) = &self.step {
+            s(what);
+        }
     }
 
     pub fn tell(&self, stage: Stage, done: usize, total: usize, part: Option<&PartResult>) {

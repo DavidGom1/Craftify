@@ -244,6 +244,7 @@ pub fn convert_fusion(src: &Path, out_root: &Path, up_y: bool, cli: &Path, pictu
         placements.push(Placement {
             stem: stems["root"].clone(),
             design: root.clone(),
+            step: None,
             rotation: IDENTITY,
             translation_mm: [0.0; 3],
             label,
@@ -263,7 +264,7 @@ pub fn convert_fusion(src: &Path, out_root: &Path, up_y: bool, cli: &Path, pictu
             t = apply(&Y_UP_TO_Z_UP, t);
         }
         let label = o.get("path").and_then(Value::as_str).unwrap_or("").to_owned();
-        placements.push(Placement { stem: stems[&cid].clone(), design: design.clone(), rotation: m, translation_mm: t, label });
+        placements.push(Placement { stem: stems[&cid].clone(), design: design.clone(), step: None, rotation: m, translation_mm: t, label });
     }
     report.instances = placements.len();
     hooks.tell(Stage::Assembly, comps.len(), comps.len(), None);

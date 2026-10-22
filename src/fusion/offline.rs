@@ -37,7 +37,8 @@ use super::timeline::Feature;
 use super::{PREVIEW_FUSION, preview_png, stem_for};
 use crate::converter::{Hooks, Stage};
 use crate::report::{PartResult, Report};
-use crate::solidcraft::assembly::{Placement, assembly_script, assembly_script_with};
+use crate::solidcraft::assembly::{Placement, assembly_script, assembly_script_with, link_parts};
+use crate::solidcraft::design::edit_document;
 use crate::solidcraft::script::{self as sc, METADATA_KEY, Measured, Script};
 use crate::solidcraft::transform::IDENTITY;
 use crate::step::Step;
@@ -228,6 +229,7 @@ fn geometry(doc: &Document, cadmpeg: &Path, build: &Path, hooks: &Hooks) -> Resu
     }
     std::fs::write(&source, &doc.data)?;
     let step = build.join(format!("{}.all.step", util::stem(Path::new(&doc.key))));
+    hooks.step(&format!("leyendo la geometría de {}", doc.name));
     let out = util::run(cadmpeg, &["convert", &s(&source), "-o", &s(&step), "--force", "--allow-errors"], Duration::from_secs(3600))?;
     if !step.is_file() {
         let all = format!("{}{}", out.stdout, out.stderr);
@@ -404,6 +406,7 @@ fn part(
     let _ = std::fs::create_dir_all(out.join("parts"));
     let attempt = (|| -> Result<()> {
         let part_step = build.join(format!("{stem}.step"));
+        hooks.step("separando sus sólidos");
         let keep: HashSet<i64> = solids.iter().copied().collect();
         let (text, done) = clean(&step.keep_only(&keep)?, 1e-3)?;
         write_latin1(&part_step, &name_solids(&text, names))?;
@@ -417,12 +420,17 @@ fn part(
             json!({"key": METADATA_KEY, "value": {"source": s(src), "source_cad": "Fusion", "document": doc.name, "component": comp.name}}),
         );
         script.add("file.save_as", json!({ "path": s(&design) }));
+        // its bodies as SolidCraft holds them: what the assembly brings in
+        let design_step = build.join(format!("{stem}.design.step"));
+        script.add("file.export", json!({ "path": s(&design_step) }));
+        hooks.step("importándola en SolidCraft");
         let results = sc::run(cli, &script.write(&build.join(format!("{stem}.part.json")))?)?;
         let problems = import_warnings(&results, step, solids, names);
         if let Some(first) = problems.first() {
             let more = if problems.len() > 1 { format!(" (y {} más)", problems.len() - 1) } else { String::new() };
             res.warnings.push(format!("SolidCraft avisa al leerla: {first}{more}"));
         }
+        hooks.step("midiéndola");
         let measured = sc::evaluate(cli, &design)?;
         res.design = Some(s(&design));
         take_measurements(&mut res, &measured);
@@ -449,10 +457,11 @@ fn part(
         let timeline = doc.asm.timelines.get(&cid).map(Vec::as_slice).unwrap_or(&[]);
         let rebuilt = if timeline.iter().any(|f| matches!(f, Feature::Box { .. } | Feature::Extrude { .. })) {
             let meta = json!({"source": s(src), "source_cad": "Fusion", "document": doc.name, "component": comp.name});
-            match from_timeline(timeline, sketches, &read_latin1(&part_step)?, &measured, stem, &build, cli, meta) {
-                Ok((path, n)) => {
-                    std::fs::copy(&path, &design)?;
-                    res.repair = Some(format!("línea temporal ({n} operaciones)"));
+            match from_timeline(timeline, sketches, &read_latin1(&part_step)?, &measured, stem, &build, cli, meta, hooks) {
+                Ok(t) => {
+                    std::fs::copy(&t.design, &design)?;
+                    std::fs::copy(&t.step, &design_step)?;
+                    res.repair = Some(format!("línea temporal ({} operaciones)", t.features));
                     true
                 }
                 Err(why) => {
@@ -464,6 +473,7 @@ fn part(
             false
         };
         if !rebuilt && !sketches.is_empty() {
+            hooks.step("añadiendo sus bocetos");
             add_sketches(&mut res, sketches, &design, &build, stem, cli);
         }
         Ok(())
@@ -509,6 +519,13 @@ fn box_volume(b: &([f64; 3], [f64; 3])) -> f64 {
     (0..3).map(|k| (b.1[k] - b.0[k]).max(0.0)).product()
 }
 
+/// A part made again from its timeline: the design, its bodies as STEP, and how many features.
+struct Timeline {
+    design: PathBuf,
+    step: PathBuf,
+    features: usize,
+}
+
 /// Build a part from its timeline and give it the imported part's bodies: SolidCraft makes a body
 /// per extruded profile where Fusion joins profiles that touch, so the bodies are joined by the
 /// imported body that holds them and renamed after it. Err says why the part is not the same.
@@ -522,18 +539,23 @@ fn from_timeline(
     build: &Path,
     cli: &Path,
     meta: Value,
-) -> std::result::Result<(PathBuf, usize), String> {
+    hooks: &Hooks,
+) -> std::result::Result<Timeline, String> {
     const TOL: f64 = 0.02; // mm
+    hooks.step("leyendo su línea temporal");
     let rebuilt = rebuild(timeline, sketches, &Step::new(step_text))?;
+    hooks.step(&format!("rehaciendo su línea temporal en SolidCraft ({} operaciones)", rebuilt.features));
     let path = build.join(format!("{stem}.timeline.solidcraft"));
     let mut script = Script::default();
     script.add("file.new", json!({ "name": stem }));
     script.commands.extend(rebuilt.script.commands);
     script.add("document.metadata.set", json!({"key": METADATA_KEY, "value": meta}));
+    // measured in the same run: each run or eval computes the whole part again
+    script.add("document.inspect", json!({ "measure": true }));
     script.add("file.save_as", json!({ "path": s(&path) }));
     let fail = |e: anyhow::Error| format!("SolidCraft: {e}");
-    sc::run(cli, &script.write(&build.join(format!("{stem}.timeline.json"))).map_err(fail)?).map_err(fail)?;
-    let got = measures(&sc::evaluate(cli, &path).map_err(fail)?);
+    let results = sc::run(cli, &script.write(&build.join(format!("{stem}.timeline.json"))).map_err(fail)?).map_err(fail)?;
+    let got = measures(inspection(&results).ok_or("SolidCraft no ha medido la pieza")?);
     let want = measures(reference);
     // each rebuilt body to the smallest imported body that holds it
     let mut groups: Vec<Vec<&Measure>> = vec![Vec::new(); want.len()];
@@ -558,29 +580,35 @@ fn from_timeline(
             return Err(format!("{} no sale igual ({:.3} mm³ frente a {:.3})", w.name, volume, w.volume));
         }
     }
-    // name each group as Fusion does and join it; the renames go first, as SolidCraft loses a
-    // join's bodies when one is renamed after it. Every body takes a temporary name first, so
-    // that no final name clashes with a body still to be renamed.
+    // name each group as Fusion does and join it. The names go into the design itself, in the
+    // features that make the bodies: renaming through SolidCraft recomputes the whole part for
+    // each body. The bodies a join takes in get names of their own, so none clashes with a
+    // name from Fusion.
+    let mut names: HashMap<&str, String> = HashMap::new();
+    let mut joins: Vec<(String, Vec<String>)> = Vec::new();
+    for (i, (g, w)) in groups.iter().zip(&want).enumerate() {
+        names.insert(&g[0].name, w.name.clone());
+        let tools: Vec<String> = (1..g.len()).map(|j| format!("__craftify{i}_{j}")).collect();
+        for (b, t) in g[1..].iter().zip(&tools) {
+            names.insert(&b.name, t.clone());
+        }
+        if !tools.is_empty() {
+            joins.push((w.name.clone(), tools));
+        }
+    }
+    hooks.step(&format!("nombrando sus {} cuerpos y uniendo los que Fusion une", want.len()));
+    name_bodies(&path, &results, &names, &joins).map_err(|e| format!("no se pueden nombrar los cuerpos: {e}"))?;
+    // one more computation of the part, which also gives what the assembly needs (its bodies as
+    // STEP) and saves the design with its cache, so that opening it is quick
+    hooks.step("comprobando los cuerpos y guardando la pieza");
+    let step = build.join(format!("{stem}.timeline.step"));
     let mut script = Script::default();
     script.add("doc.open", json!({ "path": s(&path) }));
-    let temp = |i: usize, j: usize| format!("__craftify{i}_{j}");
-    for (i, g) in groups.iter().enumerate() {
-        for (j, b) in g.iter().enumerate() {
-            script.add("body.rename", json!({"body": b.name, "name": temp(i, j)}));
-        }
-    }
-    for (i, w) in want.iter().enumerate() {
-        script.add("body.rename", json!({"body": temp(i, 0), "name": w.name}));
-    }
-    for (i, (g, w)) in groups.iter().zip(&want).enumerate() {
-        if g.len() > 1 {
-            let tools: Vec<String> = (1..g.len()).map(|j| temp(i, j)).collect();
-            script.add("solid.combine", json!({"target": w.name, "tools": tools, "operation": "join"}));
-        }
-    }
+    script.add("document.inspect", json!({ "measure": true }));
+    script.add("file.export", json!({ "path": s(&step) }));
     script.add("file.save_as", json!({ "path": s(&path) }));
-    sc::run(cli, &script.write(&build.join(format!("{stem}.timeline.bodies.json"))).map_err(fail)?).map_err(fail)?;
-    let after = measures(&sc::evaluate(cli, &path).map_err(fail)?);
+    let results = sc::run(cli, &script.write(&build.join(format!("{stem}.timeline.check.json"))).map_err(fail)?).map_err(fail)?;
+    let after = measures(inspection(&results).ok_or("SolidCraft no ha medido la pieza")?);
     let mut a: Vec<&str> = after.iter().map(|b| b.name.as_str()).collect();
     let mut b: Vec<&str> = want.iter().map(|b| b.name.as_str()).collect();
     a.sort_unstable();
@@ -589,7 +617,49 @@ fn from_timeline(
     if a != b || (va - vb).abs() > 0.001 * vb.abs().max(1.0) {
         return Err(format!("los cuerpos no quedan iguales ({} frente a {})", after.len(), want.len()));
     }
-    Ok((path, rebuilt.features))
+    Ok(Timeline { design: path, step, features: rebuilt.features })
+}
+
+/// What `document.inspect` measured in a run's results.
+fn inspection(results: &[Value]) -> Option<&Value> {
+    results.iter().rev().find(|r| r.get("bodies").is_some() && r.get("revision").is_some())
+}
+
+/// Write body names and joins into a saved design: each feature lists the names of the bodies it
+/// makes (`body_names`, in the order of the run's `created_bodies`), and a join is a `combine`
+/// feature at the end.
+fn name_bodies(design: &Path, results: &[Value], names: &HashMap<&str, String>, joins: &[(String, Vec<String>)]) -> Result<()> {
+    let created: HashMap<u64, Vec<String>> = results
+        .iter()
+        .filter_map(|r| {
+            let made: Vec<String> = r.get("created_bodies")?.as_array()?.iter().filter_map(|b| Some(b.as_str()?.to_owned())).collect();
+            (!made.is_empty()).then_some((r.get("feature")?.as_u64()?, made))
+        })
+        .collect();
+    edit_document(design, |doc| {
+        let features = doc.get_mut("features").and_then(Value::as_array_mut).ok_or_else(|| anyhow!("a design without features"))?;
+        let mut named = 0;
+        for f in features.iter_mut() {
+            let Some(made) = f.get("id").and_then(Value::as_u64).and_then(|id| created.get(&id)) else { continue };
+            let new: Vec<String> = made.iter().map(|b| names.get(b.as_str()).cloned().unwrap_or_else(|| b.clone())).collect();
+            named += made.iter().filter(|b| names.contains_key(b.as_str())).count();
+            f["body_names"] = json!(new);
+        }
+        if named != names.len() {
+            return Err(anyhow!("{} de {} cuerpos sin la operación que los hace", names.len() - named, names.len()));
+        }
+        let mut next = doc["next_id"].as_u64().ok_or_else(|| anyhow!("a design without next_id"))?;
+        let features = doc["features"].as_array_mut().expect("checked above");
+        for (k, (target, tools)) in joins.iter().enumerate() {
+            features.push(json!({
+                "id": next, "name": format!("Combine{}", k + 1), "type": "combine", "operation": "join",
+                "target": target, "tools": tools, "keep_tools": false, "suppressed": false,
+            }));
+            next += 1;
+        }
+        doc["next_id"] = json!(next);
+        Ok(())
+    })
 }
 
 /// The component's sketches into its design, in a run of their own: SolidCraft writes nothing
@@ -674,9 +744,11 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
         }
         if let Some(design) = designs.get(&key) {
             let m = [w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10]];
+            let step = build.join(format!("{}.design.step", stems[&key]));
             placements.push(Placement {
                 stem: stems[&key].clone(),
                 design: design.clone(),
+                step: step.is_file().then_some(step),
                 rotation: m,
                 translation_mm: [w[3], w[7], w[11]],
                 label: path.to_owned(),
@@ -705,7 +777,13 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
             }
             None => false,
         });
-        let run = |script: &Script| script.write(&build.join(format!("{name}.assembly.json"))).and_then(|p| sc::run(cli, &p));
+        hooks.step(&format!("colocando {} piezas", placements.len()));
+        let run = |script: &Script| {
+            script
+                .write(&build.join(format!("{name}.assembly.json")))
+                .and_then(|p| sc::run(cli, &p))
+                .and_then(|r| link_parts(&design, &placements).map(|_| r))
+        };
         let mut done = run(&with);
         if let Err(e) = &done
             && placements.iter().any(|p| sketches_of(&p.stem).is_some())

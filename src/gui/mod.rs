@@ -75,6 +75,7 @@ struct Row {
 enum Msg {
     Log(String),
     Progress(Stage, usize, usize, Option<PartResult>),
+    Step(String),
     Done(Report),
     Fail(String),
 }
@@ -120,6 +121,12 @@ pub struct App {
     /// None: indeterminate.
     progress: Option<f32>,
     status: String,
+    /// What the part being converted is doing now, and since when the status says what it says.
+    step: String,
+    since: Instant,
+    /// Parts finished and in all, and steps taken in the current one: the bar moves within a part.
+    parts: (usize, usize),
+    steps: u32,
     log: String,
     pic_src: Option<egui::TextureHandle>,
     pic_out: Option<egui::TextureHandle>,
@@ -188,6 +195,10 @@ impl App {
             running: false,
             progress: Some(0.0),
             status: "Elige un fichero para empezar.".into(),
+            step: String::new(),
+            since: Instant::now(),
+            parts: (0, 0),
+            steps: 0,
             log: String::new(),
             pic_src: None,
             pic_out: None,
@@ -311,6 +322,10 @@ impl App {
         self.show_source(ctx);
         self.progress = None; // indeterminate until the first step reports
         self.status = format!("Convirtiendo {}…", util::stem(&src));
+        self.step.clear();
+        self.since = Instant::now();
+        self.parts = (0, 0);
+        self.steps = 0;
         let (tx, rx) = channel();
         self.rx = Some(rx);
         let (out, up_y, ctx) = (PathBuf::from(&self.out), self.up_y, ctx.clone());
@@ -327,6 +342,7 @@ impl App {
                     self.log.push('\n');
                 }
                 Msg::Progress(stage, done, total, part) => self.on_progress(stage, done, total, part),
+                Msg::Step(what) => self.on_step(what),
                 Msg::Done(r) => self.finish(ctx, r),
                 Msg::Fail(e) => self.fail(&e),
             }
@@ -339,8 +355,33 @@ impl App {
         }
     }
 
+    /// A step within the part being converted: the bar goes half of what is left of that part,
+    /// so it keeps moving however many steps the part takes and never passes its end.
+    fn on_step(&mut self, what: String) {
+        self.step = what;
+        self.since = Instant::now();
+        self.steps += 1;
+        let (done, total) = self.parts;
+        if total > 0 && done < total {
+            let within = 1.0 - 0.5f32.powi(self.steps as i32);
+            self.progress = Some((done as f32 + within) / (total + 2) as f32);
+        }
+    }
+
+    /// The status line: what the conversion is doing, the step within it and how long that takes.
+    fn status_line(&self) -> String {
+        if !self.running {
+            return self.status.clone();
+        }
+        let secs = self.since.elapsed().as_secs();
+        if self.step.is_empty() { format!("{} ({secs} s)", self.status) } else { format!("{} · {} ({secs} s)", self.status, self.step) }
+    }
+
     fn on_progress(&mut self, stage: Stage, mut done: usize, total: usize, part: Option<PartResult>) {
         let steps = total + 2;
+        self.step.clear();
+        self.since = Instant::now();
+        self.steps = 0;
         match stage {
             Stage::Export => {
                 self.status = "Exportando desde Fusion… (Fusion se abre si no lo está)".into();
@@ -348,7 +389,9 @@ impl App {
                 return;
             }
             Stage::Start => {
+                self.parts = (0, total);
                 if let Some(first) = self.rows.first().map(|r| r.stem.clone()) {
+                    self.status = format!("Pieza 1 de {total}: {first}");
                     self.set_state(&first, State::Running);
                 }
             }
@@ -361,7 +404,7 @@ impl App {
                     } else {
                         State::Ok
                     };
-                    self.status = format!("Pieza {done} de {total}: {}", p.stem);
+                    self.parts = (done, total);
                     match self.rows.iter_mut().find(|r| r.stem == p.stem) {
                         Some(r) => {
                             r.state = state;
@@ -371,16 +414,18 @@ impl App {
                     }
                     if let Some(next) = self.rows.iter_mut().find(|r| r.state == State::Waiting) {
                         next.state = State::Running;
+                        self.status = format!("Pieza {} de {total}: {}", done + 1, next.stem);
                     }
                 }
             }
+            // the bar is the parts, then the assembly, then the picture
             Stage::Assembly => {
-                self.status = "Montando el ensamblaje…".into();
-                done = total + 1;
+                self.status = "Montando el ensamblaje".into();
+                done = total;
             }
             Stage::Picture => {
-                self.status = "Dibujando el resultado…".into();
-                done = total + 2;
+                self.status = "Dibujando el resultado".into();
+                done = total + 1;
             }
         }
         self.progress = Some(done as f32 / steps.max(1) as f32);
@@ -520,7 +565,10 @@ impl App {
         }
         ui.spacing_mut().item_spacing.y = t.space_8;
         progress_bar(ui, &t, self.progress);
-        ui.label(RichText::new(&self.status).size(t.font_label).color(t.text_dim));
+        ui.label(RichText::new(self.status_line()).size(t.font_label).color(t.text_dim));
+        if self.running {
+            ctx.request_repaint_after(Duration::from_secs(1)); // the seconds in the status line
+        }
         let ready = !self.running && self.report.as_ref().is_some_and(|r| r.output.is_some());
         if button(ui, &t, "↗  Abrir en SolidCraft", Kind::Secondary, ready, Some(Vec2::new(w, t.control_height + 4.0))).clicked() {
             self.open_result();
@@ -780,6 +828,7 @@ fn shell_open(path: &Path) {
 fn work(src: PathBuf, out: PathBuf, up_y: bool, tx: Sender<Msg>, ctx: egui::Context) {
     let (tx_log, ctx_log) = (tx.clone(), ctx.clone());
     let (tx_prog, ctx_prog) = (tx.clone(), ctx.clone());
+    let (tx_step, ctx_step) = (tx.clone(), ctx.clone());
     let hooks = Hooks {
         log: Box::new(move |l| {
             let _ = tx_log.send(Msg::Log(l.to_owned()));
@@ -788,6 +837,10 @@ fn work(src: PathBuf, out: PathBuf, up_y: bool, tx: Sender<Msg>, ctx: egui::Cont
         progress: Some(Box::new(move |stage, done, total, part| {
             let _ = tx_prog.send(Msg::Progress(stage, done, total, part.cloned()));
             ctx_prog.request_repaint();
+        })),
+        step: Some(Box::new(move |what| {
+            let _ = tx_step.send(Msg::Step(what.to_owned()));
+            ctx_step.request_repaint();
         })),
     };
     let opts = Options { up_y, ..Options::default() };
