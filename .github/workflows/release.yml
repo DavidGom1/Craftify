@@ -1,7 +1,8 @@
 # Builds Craftify for Windows and publishes it as a GitHub release.
 #
 # Push a tag such as v0.2.0 (the version in Cargo.toml) and this builds the patched cadmpeg and
-# Craftify on Windows, makes the installer (Craftify-<version>-setup.exe) and the portable zip
+# Craftify on Windows, fetches the fixed version of solidcraft-cli that goes with it, makes the
+# installer (Craftify-<version>-setup.exe) and the portable zip
 # (Craftify-<version>-windows-x64.zip) and attaches both to a release named after the tag. Run by
 # hand (Actions > Release > Run workflow) it only builds them and keeps them as a workflow
 # artifact, to try a build without releasing it.
@@ -47,6 +48,10 @@ jobs:
       - name: Patched cadmpeg
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File packaging\cadmpeg\build.ps1
+
+      - name: solidcraft-cli
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File packaging\solidcraft\fetch.ps1
 
       - name: Tests
         run: cargo test --release --locked

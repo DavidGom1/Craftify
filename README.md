@@ -20,8 +20,9 @@ The window and the messages it shows are in Spanish, for the people who use it.
 
 Get the latest Windows build from [Releases](https://github.com/DavidGom1/Craftify/releases):
 `Craftify-<version>-setup.exe` installs it for your user (no administrator rights);
-`Craftify-<version>-windows-x64.zip` is the same program, portable. Either way, install
-SolidCraft first (`winget install bherbruck.SolidCraft`).
+`Craftify-<version>-windows-x64.zip` is the same program, portable. Nothing else is needed: the
+`solidcraft-cli` that builds the designs comes with it. SolidCraft itself is only needed to open
+the result.
 
 ## What it does
 
@@ -56,7 +57,7 @@ SolidCraft first (`winget install bherbruck.SolidCraft`).
 | Program | Used for |
 |---|---|
 | Rust (rustup, stable) and VS 2022 Build Tools | building |
-| SolidCraft 0.16 or later | its `solidcraft-cli` builds the designs (`winget install bherbruck.SolidCraft`) |
+| `solidcraft-cli` 0.19.0 | builds the designs; `packaging/solidcraft/bin/solidcraft-cli.exe`, downloaded from SolidCraft's release with `powershell -ExecutionPolicy Bypass -File packaging\solidcraft\fetch.ps1` |
 | Inno Setup 6 | the installer (`winget install JRSoftware.InnoSetup`) |
 | patched cadmpeg | `packaging/cadmpeg/bin/cadmpeg.exe`; rebuild it with `powershell -ExecutionPolicy Bypass -File packaging\cadmpeg\build.ps1` |
 
@@ -69,10 +70,10 @@ cargo build --release
 - Window: `target/release/craftify.exe`.
 - Command line: `target/release/craftify-cli.exe "C:/path/ASSEMBLY.SLDASM" --out "C:/path/output"`
   (`--up z` keeps SolidWorks parts as they are, `--no-picture` skips the picture of the result).
-- To hand it out: `package.ps1` puts `Craftify.exe`, `craftify-cli.exe` and `cadmpeg.exe` in
-  `dist/Craftify`, and builds the installer `dist/Craftify-<version>-setup.exe` (Inno Setup 6,
-  `packaging/installer.iss`) and the portable `dist/Craftify-<version>-windows-x64.zip`. The
-  computers it runs on need only SolidCraft.
+- To hand it out: `package.ps1` puts `Craftify.exe`, `craftify-cli.exe`, `cadmpeg.exe` and
+  `solidcraft\solidcraft-cli.exe` (with SolidCraft's licences) in `dist/Craftify`, and builds the
+  installer `dist/Craftify-<version>-setup.exe` (Inno Setup 6, `packaging/installer.iss`) and the
+  portable `dist/Craftify-<version>-windows-x64.zip`. The computers it runs on need nothing else.
 - To release: set the version in `Cargo.toml`, merge, and push a tag `v<version>`. The
   `Release` workflow builds both downloads on Windows and publishes them as a GitHub release; a
   version with a suffix (`0.2.1-beta.1`) is published as a pre-release.
@@ -110,6 +111,11 @@ the order of `src/pyset.rs` against CPython.
   what `cadmpeg convert` writes, with its warnings, and the patch is applied by building cadmpeg.
 - **`solidcraft-cli` runs as a separate program**: SolidCraft does not publish its engine as a
   library, and linking it would mean building its whole kernel.
+- **`solidcraft-cli` ships with Craftify, at a fixed version** (MIT OR Apache-2.0, like
+  Craftify): the official Windows release, checked by its SHA-256 in
+  `packaging/solidcraft/fetch.ps1`. Craftify uses it before an installed SolidCraft, because
+  SolidCraft's design format changes between releases; a new version is taken by changing that
+  script and converting the test files again.
 - The window does not use SolidCraft's UI crate (it is not published and pulls in the engine):
   it copies its theme.
 

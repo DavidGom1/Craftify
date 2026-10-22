@@ -1,6 +1,7 @@
 # Build Craftify and put what the computers it runs on need into dist\Craftify: the window
-# (Craftify.exe), the command line (craftify-cli.exe) and cadmpeg.exe. Those computers need only
-# SolidCraft installed. Also writes the release downloads: dist\Craftify-<version>-setup.exe
+# (Craftify.exe), the command line (craftify-cli.exe), cadmpeg.exe and SolidCraft's
+# solidcraft-cli.exe (in dist\Craftify\solidcraft, with its licences). Those computers need
+# nothing else installed. Also writes the release downloads: dist\Craftify-<version>-setup.exe
 # (the installer) and dist\Craftify-<version>-windows-x64.zip (the same files, portable).
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -16,12 +17,20 @@ $cadmpeg = @(
 ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if (-not $cadmpeg) { throw "cadmpeg not found: powershell -ExecutionPolicy Bypass -File packaging\cadmpeg\build.ps1" }
 
+# solidcraft-cli, the fixed version packaging\solidcraft\fetch.ps1 downloads.
+$solidcraft = Join-Path $PSScriptRoot "packaging\solidcraft\bin"
+if (-not (Test-Path (Join-Path $solidcraft "solidcraft-cli.exe"))) {
+    powershell -ExecutionPolicy Bypass -File packaging\solidcraft\fetch.ps1
+    if ($LASTEXITCODE -ne 0) { throw "solidcraft-cli could not be fetched" }
+}
+
 $dist = Join-Path $PSScriptRoot "dist\Craftify"
 Remove-Item -Recurse -Force $dist -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item target\release\craftify.exe (Join-Path $dist "Craftify.exe")
 Copy-Item target\release\craftify-cli.exe $dist
 Copy-Item $cadmpeg $dist
+Copy-Item -Recurse $solidcraft (Join-Path $dist "solidcraft")
 Copy-Item NOTICE.md, LICENSE-MIT, LICENSE-APACHE, assets\fonts\OFL-IBMPlex.txt, packaging\README.txt $dist
 
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value

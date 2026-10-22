@@ -4,12 +4,11 @@ needed.
 
 **Install**
 
-1. Install [SolidCraft](https://github.com/tangency-labs/solidcraft) 0.16 or later
-   (`winget install bherbruck.SolidCraft`).
-2. Download **`Craftify-…-setup.exe`** below and run it. It installs for your user only (no
+1. Download **`Craftify-…-setup.exe`** below and run it. It installs for your user only (no
    administrator rights), adds Craftify to the Start menu and can be removed from
-   *Settings → Apps*.
-3. The program is not signed, so Windows may warn about it: choose *More info* → *Run anyway*.
+   *Settings → Apps*. It brings the `solidcraft-cli` that builds the designs; to open them you
+   need [SolidCraft](https://github.com/tangency-labs/solidcraft).
+2. The program is not signed, so Windows may warn about it: choose *More info* → *Run anyway*.
 
 Prefer not to install? `Craftify-…-windows-x64.zip` holds the same files: unzip it anywhere,
 keep the files together and run `Craftify.exe`.

@@ -48,10 +48,16 @@ impl Script {
     }
 }
 
+/// solidcraft-cli: the one shipped with this program first (its `solidcraft` folder), then the
+/// fetched one (packaging/solidcraft/bin), then SolidCraft's own if it is installed.
 pub fn find_cli(explicit: Option<&str>) -> Result<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     candidates.extend(explicit.map(PathBuf::from));
     candidates.extend(std::env::var_os("SOLIDCRAFT_CLI").map(PathBuf::from));
+    if let Some(dir) = util::exe_dir() {
+        candidates.push(dir.join("solidcraft").join("solidcraft-cli.exe"));
+    }
+    candidates.push(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/solidcraft/bin/solidcraft-cli.exe")));
     candidates.extend(util::which("solidcraft-cli"));
     for var in ["ProgramFiles", "LOCALAPPDATA"] {
         if let Some(base) = std::env::var_os(var) {
@@ -63,7 +69,7 @@ pub fn find_cli(explicit: Option<&str>) -> Result<PathBuf> {
     candidates
         .into_iter()
         .find(|c| !c.as_os_str().is_empty() && c.is_file())
-        .ok_or_else(|| SolidCraftError("solidcraft-cli not found: install SolidCraft or set SOLIDCRAFT_CLI".into()).into())
+        .ok_or_else(|| SolidCraftError("solidcraft-cli not found: it comes in Craftify's solidcraft folder".into()).into())
 }
 
 fn failure(out: &util::Output, fallback: String) -> anyhow::Error {

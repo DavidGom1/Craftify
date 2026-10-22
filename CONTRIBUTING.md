@@ -37,8 +37,8 @@ Issues and pull requests can be written in **English or Spanish**.
 You need:
 
 - Rust (stable, via [rustup](https://rustup.rs)) and the Visual Studio 2022 Build Tools (C++).
-- [SolidCraft](https://github.com/tangency-labs/solidcraft) 0.16 or later
-  (`winget install bherbruck.SolidCraft`).
+- SolidCraft's `solidcraft-cli`, at the version Craftify ships:
+  `powershell -ExecutionPolicy Bypass -File packaging\solidcraft\fetch.ps1`.
 - The patched cadmpeg: `powershell -ExecutionPolicy Bypass -File packaging\cadmpeg\build.ps1`
   (about 20 minutes the first time).
 - Only to build the installer: Inno Setup 6 (`winget install JRSoftware.InnoSetup`).
@@ -112,8 +112,8 @@ Los issues y pull requests se pueden escribir en **inglés o en español**.
 Necesitas:
 
 - Rust (stable, con [rustup](https://rustup.rs)) y las Build Tools de Visual Studio 2022 (C++).
-- [SolidCraft](https://github.com/tangency-labs/solidcraft) 0.16 o posterior
-  (`winget install bherbruck.SolidCraft`).
+- El `solidcraft-cli` de SolidCraft, en la versión que lleva Craftify:
+  `powershell -ExecutionPolicy Bypass -File packaging\solidcraft\fetch.ps1`.
 - El cadmpeg parcheado: `powershell -ExecutionPolicy Bypass -File packaging\cadmpeg\build.ps1`
   (unos 20 minutos la primera vez).
 - Solo para generar el instalador: Inno Setup 6 (`winget install JRSoftware.InnoSetup`).

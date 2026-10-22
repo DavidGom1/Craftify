@@ -1,7 +1,7 @@
 ; Craftify installer (Inno Setup 6). package.ps1 builds it from dist\Craftify:
 ;   ISCC.exe /DAppVersion=0.2.0 packaging\installer.iss
 ; It installs for the current user (no administrator rights), with Start menu and optional
-; desktop shortcuts and an uninstaller, and warns when SolidCraft is not installed.
+; desktop shortcuts and an uninstaller. SolidCraft's solidcraft-cli comes with it (folder solidcraft).
 
 #ifndef AppVersion
   #error Pass the version: ISCC.exe /DAppVersion=x.y.z packaging\installer.iss
@@ -36,10 +36,6 @@ CloseApplications=yes
 Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
-[CustomMessages]
-es.NoSolidCraft=No se ha encontrado SolidCraft en este equipo. Craftify lo necesita para crear los diseños.%n%nInstálalo antes de convertir:%n    winget install bherbruck.SolidCraft
-en.NoSolidCraft=SolidCraft was not found on this computer. Craftify needs it to build the designs.%n%nInstall it before converting:%n    winget install bherbruck.SolidCraft
-
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
@@ -47,6 +43,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\dist\Craftify\Craftify.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Craftify\craftify-cli.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Craftify\cadmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\Craftify\solidcraft\*"; DestDir: "{app}\solidcraft"; Flags: ignoreversion
 Source: "..\dist\Craftify\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Craftify\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Craftify\LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion
@@ -60,18 +57,3 @@ Name: "{autodesktop}\Craftify"; Filename: "{app}\Craftify.exe"; Tasks: desktopic
 
 [Run]
 Filename: "{app}\Craftify.exe"; Description: "{cm:LaunchProgram,Craftify}"; Flags: nowait postinstall skipifsilent
-
-[Code]
-function SolidCraftInstalled(): Boolean;
-begin
-  Result := FileExists(ExpandConstant('{commonpf64}\SolidCraft\solidcraft-cli.exe'))
-    or FileExists(ExpandConstant('{commonpf}\SolidCraft\solidcraft-cli.exe'))
-    or FileExists(ExpandConstant('{localappdata}\Programs\SolidCraft\solidcraft-cli.exe'))
-    or FileExists(ExpandConstant('{localappdata}\SolidCraft\solidcraft-cli.exe'));
-end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  if (CurStep = ssPostInstall) and not WizardSilent() and not SolidCraftInstalled() then
-    MsgBox(CustomMessage('NoSolidCraft'), mbInformation, MB_OK);
-end;

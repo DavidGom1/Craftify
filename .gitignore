@@ -14,3 +14,6 @@
 /packaging/cadmpeg/install/
 /packaging/cadmpeg/target/
 __pycache__/
+# solidcraft-cli fetched by packaging/solidcraft/fetch.ps1
+/packaging/solidcraft/bin/
+/packaging/solidcraft/work/
