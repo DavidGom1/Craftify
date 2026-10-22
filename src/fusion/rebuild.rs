@@ -16,16 +16,63 @@ use std::collections::HashMap;
 
 use serde_json::json;
 
-use super::sketch::{self, Sketch};
+use super::f3d::Box3;
+use super::sketch::{self, Curve, Sketch};
 use super::timeline::{Feature, Operation, Param, Profile};
 use crate::solidcraft::script::Script;
 use crate::step::fix::{edges_of, face_points};
-use crate::step::{Step, V, cross, dot, mean, norm, sub, unit};
+use crate::step::{Step, V, add, cross, dot, mean, mul, norm, sub, unit};
 
-/// The commands that make the features again (to run in a new design), and how many features.
+/// The commands that make the features again (to run in a new design), how many features, and
+/// the bodies they make.
 pub struct Rebuilt {
     pub script: Script,
     pub features: usize,
+    pub made: Vec<Made>,
+}
+
+/// The bodies one command makes, in the order SolidCraft makes them (an extrude: one per profile,
+/// in the order of its profiles), each as a box that lies inside it: from the points its outline
+/// passes through, so it can be smaller than the body, never larger.
+pub struct Made {
+    /// The command's index in [`Rebuilt::script`].
+    pub command: usize,
+    pub boxes: Vec<Box3>,
+}
+
+fn box_of(points: impl IntoIterator<Item = V>) -> Option<Box3> {
+    points.into_iter().fold(None, |acc, p| {
+        let (mut lo, mut hi) = acc.unwrap_or((p, p));
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+        Some((lo, hi))
+    })
+}
+
+/// Points a curve passes through, in its sketch's coordinates.
+fn on_curve(c: &Curve) -> Vec<[f64; 2]> {
+    match *c {
+        Curve::Line { a, b, .. } => vec![a, b],
+        Curve::Arc { start, end, .. } => vec![start, end],
+        Curve::Circle { center: [x, y], radius: r } => vec![[x - r, y], [x + r, y], [x, y - r], [x, y + r]],
+        Curve::Spline { points } => vec![points[0], points[3]],
+    }
+}
+
+/// Where each profile's body lies: its outline from `from` to `to` along the sketch's normal (mm).
+fn profile_boxes(sk: &Sketch, profiles: &[Profile], from: f64, to: f64) -> Result<Vec<Box3>, String> {
+    let curve: HashMap<u64, &Curve> = sk.keys.iter().copied().zip(&sk.curves).collect();
+    let n = unit(cross(sk.x_dir, sk.y_dir)).ok_or("un boceto sin plano")?;
+    profiles
+        .iter()
+        .map(|p| {
+            let flat: Vec<[f64; 2]> = p.outer.iter().filter_map(|k| curve.get(k)).flat_map(|c| on_curve(c)).collect();
+            let world = |q: [f64; 2], h: f64| add(add(sk.origin, add(mul(sk.x_dir, q[0]), mul(sk.y_dir, q[1]))), mul(n, h));
+            box_of(flat.iter().flat_map(|&q| [world(q, from), world(q, to)])).ok_or_else(|| "un perfil sin curvas".to_owned())
+        })
+        .collect()
 }
 
 /// A length expression without its sign ("-0.4 mm" -> "0.4 mm").
@@ -33,7 +80,8 @@ fn unsigned(p: &Param) -> String {
     p.expression.trim().trim_start_matches('-').trim().to_owned()
 }
 
-fn box_command(size: &[Param; 3], offset: [f64; 2], m: &[f64; 16]) -> Result<serde_json::Value, String> {
+/// The box's command, and where the box lies.
+fn box_command(size: &[Param; 3], offset: [f64; 2], m: &[f64; 16]) -> Result<(serde_json::Value, Box3), String> {
     let rot = |r: usize, c: usize| m[4 * r + c];
     // only boxes whose axes are the component's axes, in some order
     let mut axis_of_world = [0usize; 3];
@@ -56,7 +104,8 @@ fn box_command(size: &[Param; 3], offset: [f64; 2], m: &[f64; 16]) -> Result<ser
         let p = &size[axis_of_world[w]];
         if p.value > 0.0 { p.expression.clone() } else { format!("{} mm", p.value.abs()) }
     };
-    Ok(json!({"length": dim(0), "width": dim(1), "height": dim(2), "corner": corner}))
+    let far: V = std::array::from_fn(|w| corner[w] + size[axis_of_world[w]].value.abs());
+    Ok((json!({"length": dim(0), "width": dim(1), "height": dim(2), "corner": corner}), (corner, far)))
 }
 
 /// Points on the edges a fillet of this radius replaced, from the finished part.
@@ -135,16 +184,19 @@ fn pick(profiles: &[Profile], ids: &HashMap<u64, String>) -> Result<Vec<serde_js
 /// The commands for a timeline; Err says what could not be made.
 pub fn rebuild(timeline: &[Feature], sketches: &[Sketch], step: &Step) -> Result<Rebuilt, String> {
     let mut script = Script::default();
+    let mut made: Vec<Made> = Vec::new();
     let mut ids: HashMap<u64, String> = HashMap::new();
     let mut sketch_name = None;
-    // the last cut or new body from profiles: (profiles, its distance)
-    let mut last: Option<(Vec<serde_json::Value>, Param)> = None;
+    let mut current: Option<&Sketch> = None;
+    // the last cut or new body from profiles: (profiles as picked, as read, its distance)
+    let mut last: Option<(Vec<serde_json::Value>, &[Profile], Param)> = None;
     let mut features = 0;
     for f in timeline {
         match f {
             Feature::Box { size, offset, placement } => {
-                let mut params = box_command(size, *offset, placement)?;
+                let (mut params, b) = box_command(size, *offset, placement)?;
                 params["operation"] = json!("new");
+                made.push(Made { command: script.commands.len(), boxes: vec![b] });
                 script.add("solid.box", params);
             }
             Feature::Fillet { radius } => {
@@ -162,29 +214,37 @@ pub fn rebuild(timeline: &[Feature], sketches: &[Sketch], step: &Step) -> Result
                 sketch::add_to(&mut script, sk);
                 ids = sk.keys.iter().copied().zip(sketch::curve_ids(sk)).collect();
                 sketch_name = Some(sk.name.clone());
+                current = Some(sk);
                 last = None;
             }
             Feature::Extrude { operation, distance, profiles } => {
                 let sketch = sketch_name.clone().ok_or("una extrusión sin boceto")?;
-                let operation = match operation {
-                    Operation::Cut => "cut",
-                    Operation::NewBody => "new",
-                };
+                let sk = current.ok_or("una extrusión sin boceto")?;
                 let direction = if distance.value < 0.0 { "negative" } else { "positive" };
-                let mut params = json!({"sketch": sketch, "distance": unsigned(distance), "direction": direction, "operation": operation});
-                match profiles {
+                let mut params = json!({"sketch": sketch, "distance": unsigned(distance), "direction": direction});
+                // where along the sketch's normal it starts (mm), and the profiles it extrudes
+                let (start, read) = match profiles {
                     Some(p) => {
                         let picked = pick(p, &ids)?;
                         params["profiles"] = json!(picked);
-                        last = Some((picked, distance.clone()));
+                        last = Some((picked, p.as_slice(), distance.clone()));
+                        (0.0, p.as_slice())
                     }
                     // faces: the floors the previous cut of these profiles left
                     None => {
-                        let (picked, before) = last.clone().ok_or("una extrusión de caras que no siguen a un corte")?;
+                        let (picked, read, before) = last.clone().ok_or("una extrusión de caras que no siguen a un corte")?;
                         params["profiles"] = json!(picked);
                         params["start_offset"] = json!(before.expression);
+                        (before.value, read)
                     }
-                }
+                };
+                params["operation"] = json!(match operation {
+                    Operation::Cut => "cut",
+                    Operation::NewBody => {
+                        made.push(Made { command: script.commands.len(), boxes: profile_boxes(sk, read, start, start + distance.value)? });
+                        "new"
+                    }
+                });
                 script.add("solid.extrude", params);
             }
             Feature::Other { kind, name } => {
@@ -193,7 +253,7 @@ pub fn rebuild(timeline: &[Feature], sketches: &[Sketch], step: &Step) -> Result
         }
         features += 1;
     }
-    Ok(Rebuilt { script, features })
+    Ok(Rebuilt { script, features, made })
 }
 
 #[cfg(test)]
@@ -209,7 +269,8 @@ mod tests {
         // Tarjetas para picar: the box's X runs along the component's Y
         let m = [0.0, -1.0, 0.0, 53.98, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
         let size = [p("DistanceX", "85.6 mm", 85.6), p("DistanceY", "53.98 mm", 53.98), p("DistanceZ", "0.8 mm", 0.8)];
-        let v = box_command(&size, [0.0, 0.0], &m).expect("a box");
+        let (v, b) = box_command(&size, [0.0, 0.0], &m).expect("a box");
+        assert_eq!(b, ([0.0, 0.0, 0.0], [53.98, 85.6, 0.8]));
         assert_eq!(v["length"], "53.98 mm");
         assert_eq!(v["width"], "85.6 mm");
         assert_eq!(v["height"], "0.8 mm");

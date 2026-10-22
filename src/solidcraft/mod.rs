@@ -2,5 +2,6 @@
 
 pub mod assembly;
 pub mod design;
+pub mod document;
 pub mod script;
 pub mod transform;

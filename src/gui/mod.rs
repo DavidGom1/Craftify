@@ -111,6 +111,7 @@ pub struct App {
     source: String,
     out: String,
     up_y: bool,
+    check: bool,
     src_name: String,
     src_folder: String,
     src_info: String,
@@ -169,6 +170,7 @@ impl App {
         let out =
             std::env::var("CAD2SC_OUT").ok().or_else(|| setting_str(&settings, "out")).unwrap_or_else(|| util::s(&settings::default_out()));
         let up_y = settings.get("up_y").and_then(Value::as_bool).unwrap_or(true);
+        let check = settings.get("check").and_then(Value::as_bool).unwrap_or(false);
         let logo =
             texture(ctx, "logo", ICON_PNG).unwrap_or_else(|| ctx.load_texture("logo", egui::ColorImage::example(), Default::default()));
         let shot = std::env::var_os("CRAFTIFY_SCREENSHOT").map(|p| Shot {
@@ -185,6 +187,7 @@ impl App {
             source,
             out,
             up_y,
+            check,
             src_name: "Nada elegido todavía".into(),
             src_folder: String::new(),
             src_info: "SolidWorks: ensamblaje .SLDASM o pieza .SLDPRT. Fusion: diseño .f3d o proyecto .f3z (no hace falta tener Fusion)"
@@ -227,6 +230,7 @@ impl App {
         self.settings.insert("source".into(), json!(self.source));
         self.settings.insert("out".into(), json!(self.out));
         self.settings.insert("up_y".into(), json!(self.up_y));
+        self.settings.insert("check".into(), json!(self.check));
         self.settings.insert("theme".into(), json!(self.theme_pref));
         settings::save(&self.settings);
     }
@@ -328,8 +332,8 @@ impl App {
         self.steps = 0;
         let (tx, rx) = channel();
         self.rx = Some(rx);
-        let (out, up_y, ctx) = (PathBuf::from(&self.out), self.up_y, ctx.clone());
-        std::thread::spawn(move || work(src, out, up_y, tx, ctx));
+        let (out, up_y, check, ctx) = (PathBuf::from(&self.out), self.up_y, self.check, ctx.clone());
+        std::thread::spawn(move || work(src, out, up_y, check, tx, ctx));
     }
 
     fn receive(&mut self, ctx: &egui::Context) {
@@ -550,13 +554,21 @@ impl App {
         if pick_out {
             self.pick_out();
         }
-        let mut up = self.up_y;
+        let (mut up, mut check) = (self.up_y, self.check);
         card(ui, &t, Some(("3", "Opciones")), |ui| {
             toggle(ui, &t, &mut up, "Poner de pie las piezas de SolidWorks");
             ui.label(RichText::new("SolidWorks usa Y como vertical y SolidCraft usa Z.").size(t.font_body).color(t.text_dim));
+            toggle(ui, &t, &mut check, "Comprobar con SolidCraft (más lento)");
+            ui.label(
+                RichText::new(
+                    "Calcula cada pieza rehecha de Fusion y la compara con la original. Sin comprobar, SolidCraft la calcula al abrirla.",
+                )
+                .size(t.font_body)
+                .color(t.text_dim),
+            );
         });
-        if up != self.up_y {
-            self.up_y = up;
+        if (up, check) != (self.up_y, self.check) {
+            (self.up_y, self.check) = (up, check);
             self.remember();
         }
         let w = ui.available_width();
@@ -825,7 +837,7 @@ fn shell_open(path: &Path) {
 }
 
 /// The conversion, on its own thread.
-fn work(src: PathBuf, out: PathBuf, up_y: bool, tx: Sender<Msg>, ctx: egui::Context) {
+fn work(src: PathBuf, out: PathBuf, up_y: bool, check: bool, tx: Sender<Msg>, ctx: egui::Context) {
     let (tx_log, ctx_log) = (tx.clone(), ctx.clone());
     let (tx_prog, ctx_prog) = (tx.clone(), ctx.clone());
     let (tx_step, ctx_step) = (tx.clone(), ctx.clone());
@@ -843,7 +855,7 @@ fn work(src: PathBuf, out: PathBuf, up_y: bool, tx: Sender<Msg>, ctx: egui::Cont
             ctx_step.request_repaint();
         })),
     };
-    let opts = Options { up_y, ..Options::default() };
+    let opts = Options { up_y, check, ..Options::default() };
     // shown to the user, never a crash of the window
     let msg = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| converter::convert(&src, &out, &opts, &hooks))) {
         Ok(Ok(report)) => Msg::Done(report),

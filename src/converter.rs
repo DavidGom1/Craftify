@@ -73,11 +73,15 @@ pub struct Options<'a> {
     pub cadmpeg: Option<&'a str>,
     /// Draw a picture of the result.
     pub picture: bool,
+    /// Have SolidCraft compute each part rebuilt from a Fusion timeline and check it against the
+    /// part as Fusion has it (minutes for a part such as a QR code). Without it the design is
+    /// written straight away and SolidCraft computes it when it opens it.
+    pub check: bool,
 }
 
 impl Default for Options<'_> {
     fn default() -> Self {
-        Options { up_y: true, solidcraft_cli: None, cadmpeg: None, picture: true }
+        Options { up_y: true, solidcraft_cli: None, cadmpeg: None, picture: true, check: false }
     }
 }
 
@@ -98,7 +102,7 @@ pub fn convert(src: &Path, out_root: &Path, opts: &Options, hooks: &Hooks) -> Re
     let tools = sw::convert::Tools { cli, cadmpeg: sw::convert::find_cadmpeg(opts.cadmpeg)? };
     if is_fusion(&src) {
         // Fusion designs keep their own axes: `up_y` is for SolidWorks.
-        return fusion::offline::convert_fusion_offline(&src, &out_root, &tools.cli, &tools.cadmpeg, opts.picture, hooks);
+        return fusion::offline::convert_fusion_offline(&src, &out_root, &tools.cli, &tools.cadmpeg, opts.picture, opts.check, hooks);
     }
     if suffix_lower(&src) == ".sldprt" {
         sw::convert::convert_single_part(&src, &out_root, opts.up_y, &tools, opts.picture, hooks)

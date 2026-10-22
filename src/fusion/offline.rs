@@ -30,15 +30,16 @@ use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use super::f3d::{Assembly, F3dError, IDENTITY4, Mat4, matmul4, open_f3d, read_assembly};
+use super::f3d::{Assembly, Box3, Component, F3dError, IDENTITY4, Mat4, matmul4, open_f3d, read_assembly};
 use super::rebuild::rebuild;
 use super::sketch::{self, Sketch};
 use super::timeline::Feature;
 use super::{PREVIEW_FUSION, preview_png, stem_for};
 use crate::converter::{Hooks, Stage};
 use crate::report::{PartResult, Report};
-use crate::solidcraft::assembly::{Placement, assembly_script, assembly_script_with, link_parts};
+use crate::solidcraft::assembly::{Placement, assembly_script, link_parts};
 use crate::solidcraft::design::edit_document;
+use crate::solidcraft::document::{self, write_part};
 use crate::solidcraft::script::{self as sc, METADATA_KEY, Measured, Script};
 use crate::solidcraft::transform::IDENTITY;
 use crate::step::Step;
@@ -396,6 +397,7 @@ fn part(
     out: &Path,
     cli: &Path,
     src: &Path,
+    check: bool,
     hooks: &Hooks,
 ) -> PartResult {
     let t0 = Instant::now();
@@ -412,16 +414,32 @@ fn part(
         write_latin1(&part_step, &name_solids(&text, names))?;
         res.step = Some(s(&part_step));
         res.repair = Some(format!("lectura directa{}", if done.seams > 0 { format!(" ({} costuras)", done.seams) } else { String::new() }));
+        // its bodies as SolidCraft holds them: what the assembly brings in
+        let design_step = build.join(format!("{stem}.design.step"));
+        let sketches = doc.asm.sketches.get(&cid).map(Vec::as_slice).unwrap_or(&[]);
+        let timeline = doc.asm.timelines.get(&cid).map(Vec::as_slice).unwrap_or(&[]);
+        let rebuildable = timeline.iter().any(|f| matches!(f, Feature::Box { .. } | Feature::Extrude { .. }));
+        let meta = json!({"source": s(src), "source_cad": "Fusion", "document": doc.name, "component": comp.name});
+        if rebuildable && !check {
+            // written straight away, SolidCraft computes it when it opens it
+            hooks.step("escribiendo su línea temporal");
+            match write_timeline(timeline, sketches, comp, &text, stem, &design, meta.clone()) {
+                Ok(n) => {
+                    std::fs::copy(&part_step, &design_step)?;
+                    res.design = Some(s(&design));
+                    res.ok = true;
+                    res.bodies = Some(comp.bodies.len() as i64);
+                    res.repair = Some(format!("línea temporal ({n} operaciones, sin comprobar)"));
+                    return Ok(());
+                }
+                Err(why) => res.warnings.push(format!("línea temporal no reproducida: {why}")),
+            }
+        }
         let mut script = Script::default();
         script.add("file.new", json!({ "name": stem }));
         script.add("file.insert_step", json!({ "path": s(&part_step) }));
-        script.add(
-            "document.metadata.set",
-            json!({"key": METADATA_KEY, "value": {"source": s(src), "source_cad": "Fusion", "document": doc.name, "component": comp.name}}),
-        );
+        script.add("document.metadata.set", json!({"key": METADATA_KEY, "value": meta}));
         script.add("file.save_as", json!({ "path": s(&design) }));
-        // its bodies as SolidCraft holds them: what the assembly brings in
-        let design_step = build.join(format!("{stem}.design.step"));
         script.add("file.export", json!({ "path": s(&design_step) }));
         hooks.step("importándola en SolidCraft");
         let results = sc::run(cli, &script.write(&build.join(format!("{stem}.part.json")))?)?;
@@ -453,10 +471,7 @@ fn part(
         if !res.ok {
             res.warnings.push("la pieza convertida no tiene sólidos".into());
         }
-        let sketches = doc.asm.sketches.get(&cid).map(Vec::as_slice).unwrap_or(&[]);
-        let timeline = doc.asm.timelines.get(&cid).map(Vec::as_slice).unwrap_or(&[]);
-        let rebuilt = if timeline.iter().any(|f| matches!(f, Feature::Box { .. } | Feature::Extrude { .. })) {
-            let meta = json!({"source": s(src), "source_cad": "Fusion", "document": doc.name, "component": comp.name});
+        let rebuilt = if rebuildable && check {
             match from_timeline(timeline, sketches, &read_latin1(&part_step)?, &measured, stem, &build, cli, meta, hooks) {
                 Ok(t) => {
                     std::fs::copy(&t.design, &design)?;
@@ -620,6 +635,107 @@ fn from_timeline(
     Ok(Timeline { design: path, step, features: rebuilt.features })
 }
 
+/// Write a part's design from its timeline without SolidCraft computing it (it does when it
+/// opens the design). The bodies are named and joined as Fusion has them by where they lie: each
+/// body the timeline makes goes to the smallest of Fusion's bodies whose box holds it, as
+/// [`from_timeline`] does with the bodies SolidCraft computes. Returns how many features.
+fn write_timeline(
+    timeline: &[Feature],
+    sketches: &[Sketch],
+    comp: &Component,
+    step_text: &str,
+    stem: &str,
+    design: &Path,
+    meta: Value,
+) -> std::result::Result<usize, String> {
+    const TOL: f64 = 0.05; // mm: Fusion's boxes and the outlines' points are both rounded
+    let rebuilt = rebuild(timeline, sketches, &Step::new(step_text))?;
+    let (mut features, made_by) = document::features(&rebuilt.script.commands, 1).map_err(|e| e.to_string())?;
+    let want: Vec<(&str, Box3)> = comp
+        .bodies
+        .iter()
+        .map(|b| Some((b.name.as_deref()?, b.bbox?)))
+        .collect::<Option<_>>()
+        .ok_or("Fusion no guarda el nombre o la caja de algún cuerpo")?;
+    // every body the timeline makes, in order, with the Fusion body it belongs to
+    let mut owner_of: Vec<Vec<usize>> = Vec::new();
+    let mut groups: Vec<usize> = vec![0; want.len()];
+    for m in &rebuilt.made {
+        let mut owners = Vec::new();
+        for b in &m.boxes {
+            let owner = (0..want.len())
+                .filter(|&i| holds(&want[i].1, b, TOL))
+                .min_by(|&i, &j| box_volume(&want[i].1).total_cmp(&box_volume(&want[j].1)))
+                .ok_or("un cuerpo de la línea temporal que no está en ninguno de Fusion")?;
+            groups[owner] += 1;
+            owners.push(owner);
+        }
+        owner_of.push(owners);
+    }
+    if let Some(i) = groups.iter().position(|&n| n == 0) {
+        return Err(format!("{} no sale de la línea temporal", want[i].0));
+    }
+    // the first body of each group takes Fusion's name, the others one of their own to be joined
+    let mut seen = vec![0usize; want.len()];
+    let mut tools: Vec<Vec<String>> = vec![Vec::new(); want.len()];
+    for (m, owners) in rebuilt.made.iter().zip(&owner_of) {
+        let names: Vec<String> = owners
+            .iter()
+            .map(|&i| {
+                seen[i] += 1;
+                if seen[i] == 1 {
+                    want[i].0.to_owned()
+                } else {
+                    let t = format!("__craftify{i}_{}", seen[i] - 1);
+                    tools[i].push(t.clone());
+                    t
+                }
+            })
+            .collect();
+        let f = made_by[m.command].ok_or("un cuerpo de una orden que no es una operación")?;
+        features[f]["body_names"] = json!(names);
+    }
+    let first = features.len() as u64 + 1;
+    for (k, (i, t)) in tools.iter().enumerate().filter(|(_, t)| !t.is_empty()).enumerate() {
+        features.push(json!({
+            "id": first + k as u64, "name": format!("Combine{}", k + 1), "type": "combine", "operation": "join",
+            "target": want[i].0, "tools": t, "keep_tools": false, "suppressed": false,
+        }));
+    }
+    write_part(design, stem, features, meta).map_err(|e| e.to_string())?;
+    Ok(rebuilt.features)
+}
+
+/// Write each part's sketches into its component of an assembly design, as sketch features of
+/// that component.
+fn add_component_sketches(assembly: &Path, parts: &[(&str, &[Sketch])]) -> Result<()> {
+    if parts.is_empty() {
+        return Ok(());
+    }
+    edit_document(assembly, |doc| {
+        let ids: HashMap<String, u64> = doc["components"]
+            .as_array()
+            .map(|cs| cs.iter().filter_map(|c| Some((c["name"].as_str()?.to_owned(), c["id"].as_u64()?))).collect())
+            .unwrap_or_default();
+        let mut next = doc["next_id"].as_u64().ok_or_else(|| anyhow!("a design without next_id"))?;
+        let mut added = Vec::new();
+        for (stem, sketches) in parts {
+            let component = *ids.get(*stem).ok_or_else(|| anyhow!("no component {stem}"))?;
+            let mut script = Script::default();
+            sketches.iter().for_each(|sk| sketch::add_to(&mut script, sk));
+            let (features, _) = document::features(&script.commands, next)?;
+            next += features.len() as u64;
+            added.extend(features.into_iter().map(|mut f| {
+                f["component"] = json!(component);
+                f
+            }));
+        }
+        doc["features"].as_array_mut().ok_or_else(|| anyhow!("a design without features"))?.extend(added);
+        doc["next_id"] = json!(next);
+        Ok(())
+    })
+}
+
 /// What `document.inspect` measured in a run's results.
 fn inspection(results: &[Value]) -> Option<&Value> {
     results.iter().rev().find(|r| r.get("bodies").is_some() && r.get("revision").is_some())
@@ -682,7 +798,15 @@ fn add_sketches(res: &mut PartResult, sketches: &[Sketch], design: &Path, build:
     }
 }
 
-pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: &Path, picture: bool, hooks: &Hooks) -> Result<Report> {
+pub fn convert_fusion_offline(
+    src: &Path,
+    out_root: &Path,
+    cli: &Path,
+    cadmpeg: &Path,
+    picture: bool,
+    check: bool,
+    hooks: &Hooks,
+) -> Result<Report> {
     let t0 = Instant::now();
     let name = util::stem(src);
     let out = out_root.join(&name);
@@ -716,7 +840,7 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
         let solids = by_comp.get(cid).cloned().unwrap_or_default();
         let r = match steps[key].as_ref() {
             Some(step) if !solids.is_empty() => {
-                let r = part(d, *cid, &solids, names, step, stem, &out, cli, src, hooks);
+                let r = part(d, *cid, &solids, names, step, stem, &out, cli, src, check, hooks);
                 if r.ok
                     && let Some(des) = &r.design
                 {
@@ -767,29 +891,25 @@ pub fn convert_fusion_offline(src: &Path, out_root: &Path, cli: &Path, cadmpeg: 
         let mut meta = Map::new();
         meta.insert("source".into(), json!(s(src)));
         meta.insert("source_cad".into(), json!("Fusion"));
-        // a linked part brings only its bodies: its sketches are drawn again in its component
         let by_stem: HashMap<&str, &(String, u64)> = stems.iter().map(|(k, v)| (v.as_str(), k)).collect();
         let sketches_of = |stem: &str| by_stem.get(stem).and_then(|(key, cid)| docs[key].asm.sketches.get(cid)).filter(|s| !s.is_empty());
-        let (with, _) = assembly_script_with(&name, &placements, &design, meta.clone(), |stem, script| match sketches_of(stem) {
-            Some(sks) => {
-                sks.iter().for_each(|sk| sketch::add_to(script, sk));
-                true
-            }
-            None => false,
-        });
         hooks.step(&format!("colocando {} piezas", placements.len()));
-        let run = |script: &Script| {
-            script
-                .write(&build.join(format!("{name}.assembly.json")))
-                .and_then(|p| sc::run(cli, &p))
-                .and_then(|r| link_parts(&design, &placements).map(|_| r))
-        };
-        let mut done = run(&with);
-        if let Err(e) = &done
-            && placements.iter().any(|p| sketches_of(&p.stem).is_some())
-        {
-            report.warnings.push(format!("el ensamblaje va sin bocetos: {e}"));
-            done = run(&assembly_script(&name, &placements, &design, meta).0);
+        let (script, _) = assembly_script(&name, &placements, &design, meta);
+        let done = script
+            .write(&build.join(format!("{name}.assembly.json")))
+            .and_then(|p| sc::run(cli, &p))
+            .and_then(|r| link_parts(&design, &placements).map(|_| r));
+        // a linked part brings only its bodies: its sketches are written again in its component
+        if done.is_ok() {
+            let mut seen = HashSet::new();
+            let parts: Vec<(&str, &[Sketch])> = placements
+                .iter()
+                .filter(|p| seen.insert(p.stem.as_str()))
+                .filter_map(|p| Some((p.stem.as_str(), sketches_of(&p.stem)?.as_slice())))
+                .collect();
+            if let Err(e) = add_component_sketches(&design, &parts) {
+                report.warnings.push(format!("el ensamblaje va sin bocetos: {e}"));
+            }
         }
         match done {
             Ok(_) => {
