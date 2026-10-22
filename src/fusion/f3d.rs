@@ -266,6 +266,8 @@ pub struct Assembly {
     pub root: Option<u64>,
     /// Each component's sketches, by component record id.
     pub sketches: HashMap<u64, Vec<super::sketch::Sketch>>,
+    /// Each component's timeline, by component record id.
+    pub timelines: HashMap<u64, Vec<super::timeline::Feature>>,
 }
 
 static UTF16: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?-u)(?:[\x20-\x7e]\x00){2,}").expect("utf16 pattern"));
@@ -534,7 +536,8 @@ pub fn read_assembly(f: &F3d) -> Result<Assembly> {
         }
     }
     let sketches = super::sketch::read_sketches(s, &roots);
-    Ok(Assembly { components, placements, root, sketches })
+    let timelines = super::timeline::read_timelines(s, &roots);
+    Ok(Assembly { components, placements, root, sketches, timelines })
 }
 
 /// (body selector, entity suffix) pairs: a u32 count after the header's zero run.

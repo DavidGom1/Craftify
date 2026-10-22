@@ -10,7 +10,9 @@
 pub mod bridge;
 pub mod f3d;
 pub mod offline;
+pub mod rebuild;
 pub mod sketch;
+pub mod timeline;
 
 use std::collections::HashSet;
 use std::io::{Cursor, Read};

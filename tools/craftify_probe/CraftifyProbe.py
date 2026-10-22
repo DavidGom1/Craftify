@@ -159,18 +159,64 @@ def feature_info(f):
          "bodies": safe(lambda: [b.name for b in f.bodies], []),
          "participants": safe(lambda: [b.name for b in f.participantBodies], [])}
     if t == "ExtrudeFeature":
-        d["profiles"] = safe(lambda: [p.parentSketch.name + "#" + str(i) for i, p in enumerate(_profiles(f.profile))])
+        d["profiles"] = safe(lambda: [profile_info(p) for p in _profiles(f.profile)])
         d["start"] = safe(lambda: f.startExtent.objectType.split("::")[-1])
+        d["start_offset"] = safe(lambda: f.startExtent.offset.expression)
         d["extent_type"] = safe(lambda: int(f.extentType))
         d["one"] = safe(lambda: extent_info(f.extentOne))
         d["two"] = safe(lambda: extent_info(f.extentTwo))
         d["taper_one"] = safe(lambda: f.taperAngleOne.expression)
         d["solid"] = safe(lambda: f.isSolid)
-    for attr in ("distance", "angle", "radius", "thickness"):
+    if t == "FilletFeature":
+        d["edge_sets"] = []
+        for es in safe(lambda: list(f.edgeSets), []):
+            d["edge_sets"].append({"type": es.objectType.split("::")[-1], "radius": safe(lambda: es.radius.expression),
+                                   "tangent_chain": safe(lambda: es.isTangentChain),
+                                   "edges": safe(lambda: [edge_info(es.edges.item(i)) for i in range(es.edges.count)], [])})
+    # Every parameter and matrix the feature exposes (a primitive's sizes and placement...).
+    d["parameters"] = {}
+    d["matrices"] = {}
+    for attr in dir(f):
+        if attr.startswith("_") or attr in ("parentComponent", "timelineObject", "nativeObject", "assemblyContext"):
+            continue
         v = safe(lambda: getattr(f, attr))
-        if v is not None and hasattr(v, "expression"):
-            d[attr] = v.expression
+        if v is None or callable(v):
+            continue
+        if hasattr(v, "expression") and hasattr(v, "value"):
+            d["parameters"][attr] = {"name": safe(lambda: v.name), "expression": safe(lambda: v.expression), "value": safe(lambda: v.value)}
+        elif hasattr(v, "asArray") and safe(lambda: len(v.asArray())) == 16:
+            d["matrices"][attr] = mat(v)
+        elif hasattr(v, "x") and hasattr(v, "y") and hasattr(v, "z") and not hasattr(v, "count"):
+            d["matrices"][attr] = [safe(lambda: v.x), safe(lambda: v.y), safe(lambda: v.z)]
     return d
+
+
+def edge_info(e):
+    g = safe(lambda: e.geometry)
+    ev = safe(lambda: e.evaluator)
+    mid = None
+    if ev is not None:
+        r = safe(lambda: ev.getParameterExtents())
+        if r and r[0]:
+            p = safe(lambda: ev.getPointAtParameter((r[1] + r[2]) / 2))
+            if p and p[0]:
+                mid = pt(p[1])
+    return {"type": safe(lambda: g.objectType.split("::")[-1]), "body": safe(lambda: e.body.name),
+            "start": safe(lambda: pt(e.startVertex.geometry)), "end": safe(lambda: pt(e.endVertex.geometry)),
+            "mid": mid, "length_mm": safe(lambda: e.length * 10)}
+
+
+def profile_info(p):
+    a = safe(lambda: p.areaProperties())
+    sk = safe(lambda: p.parentSketch)
+    idx = None
+    if sk is not None:
+        for i in range(safe(lambda: sk.profiles.count, 0)):
+            if safe(lambda: sk.profiles.item(i) == p):
+                idx = i
+                break
+    return {"sketch": safe(lambda: sk.name), "index": idx, "area_mm2": safe(lambda: a.area * 100.0),
+            "centroid": safe(lambda: pt(a.centroid)), "loops": safe(lambda: p.profileLoops.count)}
 
 
 def _profiles(p):
@@ -216,7 +262,9 @@ def run_job(folder):
             e = safe(lambda: t.entity)
             result["timeline"].append({"index": i, "name": safe(lambda: t.name), "type": safe(lambda: e.objectType.split("::")[-1]),
                                        "suppressed": safe(lambda: t.isSuppressed), "group": safe(lambda: t.isGroup),
-                                       "parent_group": safe(lambda: t.parentGroup.name)})
+                                       "parent_group": safe(lambda: t.parentGroup.name),
+                                       "component": safe(lambda: e.parentComponent.name),
+                                       "token": safe(lambda: e.entityToken)})
         result["parameters"] = [{"name": safe(lambda: p.name), "expression": safe(lambda: p.expression),
                                  "value": safe(lambda: p.value), "unit": safe(lambda: p.unit),
                                  "user": p.objectType.endswith("UserParameter"),

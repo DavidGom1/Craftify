@@ -57,33 +57,38 @@ pub struct Sketch {
     pub x_dir: [f64; 3],
     pub y_dir: [f64; 3],
     pub curves: Vec<Curve>,
+    /// Each curve's key in the sketch (what a profile lists its curves by), with `curves`.
+    pub keys: Vec<u64>,
     /// Curves of kinds not read yet (ellipses, texts, projected edges…).
     pub skipped: usize,
 }
 
-fn u32_at(b: &[u8], at: usize) -> Option<u32> {
+/// A curve's key, the number profiles name it by: a u64 at byte 122 of its record.
+const KEY_AT: usize = 122;
+
+pub(super) fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
 }
 
-fn u64_at(b: &[u8], at: usize) -> Option<u64> {
+pub(super) fn u64_at(b: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_le_bytes(b.get(at..at + 8)?.try_into().ok()?))
 }
 
-fn f64_at(b: &[u8], at: usize) -> Option<f64> {
+pub(super) fn f64_at(b: &[u8], at: usize) -> Option<f64> {
     Some(f64::from_le_bytes(b.get(at..at + 8)?.try_into().ok()?))
 }
 
-fn is(s: &Segment, e: u64, guid: &str) -> bool {
+pub(super) fn is(s: &Segment, e: u64, guid: &str) -> bool {
     s.guid_of(e).is_some_and(|g| g.eq_ignore_ascii_case(guid))
 }
 
 /// Every reference (u64 id of a record of that type) in the record, with its position.
-fn refs_to<'a>(s: &'a Segment, rec: &'a [u8], guid: &'a str) -> impl Iterator<Item = (usize, u64)> + 'a {
+pub(super) fn refs_to<'a>(s: &'a Segment, rec: &'a [u8], guid: &'a str) -> impl Iterator<Item = (usize, u64)> + 'a {
     (0..rec.len().saturating_sub(7)).filter_map(move |i| u64_at(rec, i).filter(|x| is(s, *x, guid)).map(|x| (i, x)))
 }
 
 /// The last flagged reference (a byte 1, then the id) to a record of that type.
-fn last_flagged(s: &Segment, rec: &[u8], guid: &str) -> Option<u64> {
+pub(super) fn last_flagged(s: &Segment, rec: &[u8], guid: &str) -> Option<u64> {
     (1..rec.len().saturating_sub(7)).rev().filter(|&i| rec[i - 1] == 1).filter_map(|i| u64_at(rec, i)).find(|x| is(s, *x, guid))
 }
 
@@ -177,7 +182,7 @@ pub fn read_sketches(s: &Segment, components: &[u64]) -> HashMap<u64, Vec<Sketch
         let plane = |m: &Mat4| ([m[3], m[7], m[11]], [m[0], m[4], m[8]], [m[1], m[5], m[9]]);
         let (origin, x_dir, y_dir) = plane(&m);
         let name = default_name(rec).unwrap_or_else(|| "Boceto".into());
-        by_id.insert(e, Sketch { id: e, name, origin, x_dir, y_dir, curves: Vec::new(), skipped: 0 });
+        by_id.insert(e, Sketch { id: e, name, origin, x_dir, y_dir, curves: Vec::new(), keys: Vec::new(), skipped: 0 });
     }
     // container -> its sketch, and the name the user gave it
     let mut owner: HashMap<u64, u64> = HashMap::new();
@@ -194,10 +199,13 @@ pub fn read_sketches(s: &Segment, components: &[u64]) -> HashMap<u64, Vec<Sketch
         }
     }
     let mut points: HashMap<u64, Option<[f64; 2]>> = HashMap::new();
-    let add = |sk: Option<&u64>, curve: Option<Curve>, by_id: &mut HashMap<u64, Sketch>| {
+    let add = |sk: Option<&u64>, curve: Option<Curve>, rec: &[u8], by_id: &mut HashMap<u64, Sketch>| {
         if let Some(sketch) = sk.and_then(|k| by_id.get_mut(k)) {
             match curve {
-                Some(c) => sketch.curves.push(c),
+                Some(c) => {
+                    sketch.curves.push(c);
+                    sketch.keys.push(u64_at(rec, KEY_AT).unwrap_or(u64::MAX));
+                }
                 None => sketch.skipped += 1,
             }
         }
@@ -213,7 +221,7 @@ pub fn read_sketches(s: &Segment, components: &[u64]) -> HashMap<u64, Vec<Sketch
                 .map(|(a, b)| Curve::Line { a, b, construction: rec.get(310) == Some(&1) }),
             _ => None,
         };
-        add(sk, curve, &mut by_id);
+        add(sk, curve, rec, &mut by_id);
     }
     for &e in s.of_type(ARC) {
         let Ok(rec) = s.record(e) else { continue };
@@ -230,13 +238,18 @@ pub fn read_sketches(s: &Segment, components: &[u64]) -> HashMap<u64, Vec<Sketch
             }
             _ => None,
         };
-        add(sk, curve.filter(|c| !matches!(c, Curve::Arc { center, .. } | Curve::Circle { center, .. } if !finite(center))), &mut by_id);
+        add(
+            sk,
+            curve.filter(|c| !matches!(c, Curve::Arc { center, .. } | Curve::Circle { center, .. } if !finite(center))),
+            rec,
+            &mut by_id,
+        );
     }
     for &e in s.of_type(SPLINE) {
         let Ok(rec) = s.record(e) else { continue };
         let sk = last_flagged(s, rec, CONTAINER).and_then(|c| owner.get(&c));
         let curve = bezier(rec).filter(|p| p.iter().all(|q| finite(q))).map(|points| Curve::Spline { points });
-        add(sk, curve, &mut by_id);
+        add(sk, curve, rec, &mut by_id);
     }
     let mut out: HashMap<u64, Vec<Sketch>> = HashMap::new();
     let mut ids: Vec<u64> = by_id.keys().copied().collect();
@@ -247,6 +260,34 @@ pub fn read_sketches(s: &Segment, components: &[u64]) -> HashMap<u64, Vec<Sketch
         }
     }
     out
+}
+
+/// The id SolidCraft gives each curve that [`add_to`] draws: a letter for its kind and the count
+/// of that kind in the sketch (l1, a1, c1, s1…).
+pub fn curve_ids(sketch: &Sketch) -> Vec<String> {
+    let (mut l, mut a, mut c, mut s) = (0, 0, 0, 0);
+    sketch
+        .curves
+        .iter()
+        .map(|curve| match curve {
+            Curve::Line { .. } => {
+                l += 1;
+                format!("l{l}")
+            }
+            Curve::Arc { .. } => {
+                a += 1;
+                format!("a{a}")
+            }
+            Curve::Circle { .. } => {
+                c += 1;
+                format!("c{c}")
+            }
+            Curve::Spline { .. } => {
+                s += 1;
+                format!("s{s}")
+            }
+        })
+        .collect()
 }
 
 /// SolidCraft refuses a spline with two equal control points in a row (Fusion keeps them: a

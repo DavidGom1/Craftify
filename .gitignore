@@ -13,3 +13,4 @@
 /packaging/cadmpeg/work/
 /packaging/cadmpeg/install/
 /packaging/cadmpeg/target/
+__pycache__/

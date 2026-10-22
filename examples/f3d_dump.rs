@@ -6,6 +6,7 @@
 use std::io::Read;
 
 use craftify::fusion::f3d::{open_f3d, read_assembly};
+use craftify::fusion::timeline::Feature;
 
 fn dump(name: &str, data: &[u8]) -> anyhow::Result<()> {
     let f = open_f3d(data)?;
@@ -20,6 +21,25 @@ fn dump(name: &str, data: &[u8]) -> anyhow::Result<()> {
             c.bodies.len(),
             if ext.is_empty() { String::new() } else { format!("external {ext:?}") }
         );
+    }
+    for (id, c) in &asm.components {
+        if let Some(tl) = asm.timelines.get(id).filter(|t| !t.is_empty()) {
+            println!("  timeline of {}:", c.name);
+            for f in tl {
+                match f {
+                    Feature::Extrude { operation, distance, profiles } => println!(
+                        "    Extrude {operation:?} {} profiles {:?}",
+                        distance.expression,
+                        profiles.as_ref().map(|p| (p.len(), p.iter().map(|q| q.holes.len()).sum::<usize>()))
+                    ),
+                    Feature::Box { size, offset, placement } => println!(
+                        "    Box {} x {} x {} offset {offset:?} placement {placement:?}",
+                        size[0].expression, size[1].expression, size[2].expression
+                    ),
+                    other => println!("    {other:?}"),
+                }
+            }
+        }
     }
     Ok(())
 }

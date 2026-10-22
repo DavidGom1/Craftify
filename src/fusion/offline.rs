@@ -14,6 +14,10 @@
 //!   component).
 //!
 //! Each part is checked against the boxes Fusion cached for its bodies.
+//!
+//! A component whose timeline can be made again (see [`super::rebuild`]) gets it: the part is
+//! built from its features, its bodies are joined and named as Fusion's are, and it replaces the
+//! imported part when both have the same bodies (names, boxes and volumes).
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -27,13 +31,16 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use super::f3d::{Assembly, F3dError, IDENTITY4, Mat4, matmul4, open_f3d, read_assembly};
+use super::rebuild::rebuild;
 use super::sketch::{self, Sketch};
+use super::timeline::Feature;
 use super::{PREVIEW_FUSION, preview_png, stem_for};
 use crate::converter::{Hooks, Stage};
 use crate::report::{PartResult, Report};
 use crate::solidcraft::assembly::{Placement, assembly_script, assembly_script_with};
 use crate::solidcraft::script::{self as sc, METADATA_KEY, Measured, Script};
 use crate::solidcraft::transform::IDENTITY;
+use crate::step::Step;
 use crate::step::clean::clean;
 use crate::step::split::StepFile;
 use crate::sw::convert::{BOX_TOLERANCE, finish, inside_out_warnings, take_measurements};
@@ -438,7 +445,25 @@ fn part(
         if !res.ok {
             res.warnings.push("la pieza convertida no tiene sólidos".into());
         }
-        if let Some(sketches) = doc.asm.sketches.get(&cid).filter(|s| !s.is_empty()) {
+        let sketches = doc.asm.sketches.get(&cid).map(Vec::as_slice).unwrap_or(&[]);
+        let timeline = doc.asm.timelines.get(&cid).map(Vec::as_slice).unwrap_or(&[]);
+        let rebuilt = if timeline.iter().any(|f| matches!(f, Feature::Box { .. } | Feature::Extrude { .. })) {
+            let meta = json!({"source": s(src), "source_cad": "Fusion", "document": doc.name, "component": comp.name});
+            match from_timeline(timeline, sketches, &read_latin1(&part_step)?, &measured, stem, &build, cli, meta) {
+                Ok((path, n)) => {
+                    std::fs::copy(&path, &design)?;
+                    res.repair = Some(format!("línea temporal ({n} operaciones)"));
+                    true
+                }
+                Err(why) => {
+                    res.warnings.push(format!("línea temporal no reproducida: {why}"));
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        if !rebuilt && !sketches.is_empty() {
             add_sketches(&mut res, sketches, &design, &build, stem, cli);
         }
         Ok(())
@@ -449,6 +474,122 @@ fn part(
     res.seconds = round1(t0.elapsed().as_secs_f64());
     hooks.log(&res.log_line());
     res
+}
+
+/// A body as `solidcraft-cli eval` measures it.
+struct Measure {
+    name: String,
+    bbox: ([f64; 3], [f64; 3]),
+    volume: f64,
+}
+
+fn measures(measured: &Value) -> Vec<Measure> {
+    Measured(measured)
+        .bodies()
+        .iter()
+        .filter_map(|b| {
+            let corner = |k: &str| -> Option<[f64; 3]> {
+                let a = b.get("bbox")?.get(k)?.as_array()?;
+                Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?])
+            };
+            Some(Measure {
+                name: b.get("name")?.as_str()?.to_owned(),
+                bbox: (corner("min")?, corner("max")?),
+                volume: b.get("volume_mm3")?.as_f64()?,
+            })
+        })
+        .collect()
+}
+
+fn holds(outer: &([f64; 3], [f64; 3]), inner: &([f64; 3], [f64; 3]), tol: f64) -> bool {
+    (0..3).all(|k| inner.0[k] >= outer.0[k] - tol && inner.1[k] <= outer.1[k] + tol)
+}
+
+fn box_volume(b: &([f64; 3], [f64; 3])) -> f64 {
+    (0..3).map(|k| (b.1[k] - b.0[k]).max(0.0)).product()
+}
+
+/// Build a part from its timeline and give it the imported part's bodies: SolidCraft makes a body
+/// per extruded profile where Fusion joins profiles that touch, so the bodies are joined by the
+/// imported body that holds them and renamed after it. Err says why the part is not the same.
+#[allow(clippy::too_many_arguments)]
+fn from_timeline(
+    timeline: &[Feature],
+    sketches: &[Sketch],
+    step_text: &str,
+    reference: &Value,
+    stem: &str,
+    build: &Path,
+    cli: &Path,
+    meta: Value,
+) -> std::result::Result<(PathBuf, usize), String> {
+    const TOL: f64 = 0.02; // mm
+    let rebuilt = rebuild(timeline, sketches, &Step::new(step_text))?;
+    let path = build.join(format!("{stem}.timeline.solidcraft"));
+    let mut script = Script::default();
+    script.add("file.new", json!({ "name": stem }));
+    script.commands.extend(rebuilt.script.commands);
+    script.add("document.metadata.set", json!({"key": METADATA_KEY, "value": meta}));
+    script.add("file.save_as", json!({ "path": s(&path) }));
+    let fail = |e: anyhow::Error| format!("SolidCraft: {e}");
+    sc::run(cli, &script.write(&build.join(format!("{stem}.timeline.json"))).map_err(fail)?).map_err(fail)?;
+    let got = measures(&sc::evaluate(cli, &path).map_err(fail)?);
+    let want = measures(reference);
+    // each rebuilt body to the smallest imported body that holds it
+    let mut groups: Vec<Vec<&Measure>> = vec![Vec::new(); want.len()];
+    for b in &got {
+        let owner = (0..want.len())
+            .filter(|&i| holds(&want[i].bbox, &b.bbox, TOL))
+            .min_by(|&i, &j| box_volume(&want[i].bbox).total_cmp(&box_volume(&want[j].bbox)))
+            .ok_or_else(|| format!("el cuerpo {} no está en ninguno de la pieza", b.name))?;
+        groups[owner].push(b);
+    }
+    for (w, g) in want.iter().zip(&groups) {
+        let volume: f64 = g.iter().map(|b| b.volume).sum();
+        let mut union = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for b in g {
+            for k in 0..3 {
+                union.0[k] = union.0[k].min(b.bbox.0[k]);
+                union.1[k] = union.1[k].max(b.bbox.1[k]);
+            }
+        }
+        let same_box = (0..3).all(|k| (union.0[k] - w.bbox.0[k]).abs() <= TOL && (union.1[k] - w.bbox.1[k]).abs() <= TOL);
+        if g.is_empty() || !same_box || (volume - w.volume).abs() > 0.01 * w.volume.abs().max(0.1) {
+            return Err(format!("{} no sale igual ({:.3} mm³ frente a {:.3})", w.name, volume, w.volume));
+        }
+    }
+    // name each group as Fusion does and join it; the renames go first, as SolidCraft loses a
+    // join's bodies when one is renamed after it. Every body takes a temporary name first, so
+    // that no final name clashes with a body still to be renamed.
+    let mut script = Script::default();
+    script.add("doc.open", json!({ "path": s(&path) }));
+    let temp = |i: usize, j: usize| format!("__craftify{i}_{j}");
+    for (i, g) in groups.iter().enumerate() {
+        for (j, b) in g.iter().enumerate() {
+            script.add("body.rename", json!({"body": b.name, "name": temp(i, j)}));
+        }
+    }
+    for (i, w) in want.iter().enumerate() {
+        script.add("body.rename", json!({"body": temp(i, 0), "name": w.name}));
+    }
+    for (i, (g, w)) in groups.iter().zip(&want).enumerate() {
+        if g.len() > 1 {
+            let tools: Vec<String> = (1..g.len()).map(|j| temp(i, j)).collect();
+            script.add("solid.combine", json!({"target": w.name, "tools": tools, "operation": "join"}));
+        }
+    }
+    script.add("file.save_as", json!({ "path": s(&path) }));
+    sc::run(cli, &script.write(&build.join(format!("{stem}.timeline.bodies.json"))).map_err(fail)?).map_err(fail)?;
+    let after = measures(&sc::evaluate(cli, &path).map_err(fail)?);
+    let mut a: Vec<&str> = after.iter().map(|b| b.name.as_str()).collect();
+    let mut b: Vec<&str> = want.iter().map(|b| b.name.as_str()).collect();
+    a.sort_unstable();
+    b.sort_unstable();
+    let (va, vb): (f64, f64) = (after.iter().map(|x| x.volume).sum(), want.iter().map(|x| x.volume).sum());
+    if a != b || (va - vb).abs() > 0.001 * vb.abs().max(1.0) {
+        return Err(format!("los cuerpos no quedan iguales ({} frente a {})", after.len(), want.len()));
+    }
+    Ok((path, rebuilt.features))
 }
 
 /// The component's sketches into its design, in a run of their own: SolidCraft writes nothing
