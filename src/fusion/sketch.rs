@@ -28,12 +28,25 @@ const SPLINE: &str = "D82E012F-6DDD-4AED-BDE1-C0F7F9100B9B";
 /// A curve in the sketch's plane, mm.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Curve {
-    Line { a: [f64; 2], b: [f64; 2], construction: bool },
+    Line {
+        a: [f64; 2],
+        b: [f64; 2],
+        construction: bool,
+    },
     /// Counter-clockwise from `start` to `end`.
-    Arc { center: [f64; 2], start: [f64; 2], end: [f64; 2] },
-    Circle { center: [f64; 2], radius: f64 },
+    Arc {
+        center: [f64; 2],
+        start: [f64; 2],
+        end: [f64; 2],
+    },
+    Circle {
+        center: [f64; 2],
+        radius: f64,
+    },
     /// A cubic Bézier: four control points.
-    Spline { points: [[f64; 2]; 4] },
+    Spline {
+        points: [[f64; 2]; 4],
+    },
 }
 
 pub struct Sketch {
@@ -80,7 +93,7 @@ fn name_at(rec: &[u8], at: usize) -> Option<String> {
     if !(1..128).contains(&n) {
         return None;
     }
-    let units: Vec<u16> = rec.get(at + 4..at + 4 + 2 * n)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let units: Vec<u16> = rec.get(at + 4..at + 4 + 2 * n)?.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
     let t = String::from_utf16(&units).ok()?;
     let ok = t.chars().all(|c| !c.is_control() && (c as u32) < 0x250) && t.chars().any(char::is_alphabetic) && t.trim() == t;
     ok.then_some(t)
@@ -129,7 +142,8 @@ fn nurbs_at(rec: &[u8], i: usize) -> Option<(u32, Vec<f64>, Vec<[f64; 2]>)> {
         return None;
     }
     let weights = (0..nw).map(|k| f64_at(rec, p + 12 + 8 * k)).collect::<Option<Vec<f64>>>()?;
-    let points = (0..nc).map(|k| Some([f64_at(rec, q + 12 + 24 * k)? * 10.0, f64_at(rec, q + 20 + 24 * k)? * 10.0])).collect::<Option<_>>()?;
+    let points =
+        (0..nc).map(|k| Some([f64_at(rec, q + 12 + 24 * k)? * 10.0, f64_at(rec, q + 20 + 24 * k)? * 10.0])).collect::<Option<_>>()?;
     Some((deg, weights, points))
 }
 
@@ -254,7 +268,10 @@ fn part_equal_points(mut p: [[f64; 2]; 4]) -> [[f64; 2]; 4] {
 /// (`connect: false`): Fusion keeps no constraints on them, and joining them puts hundreds of
 /// coincidence marks on a sketch such as a QR code. The profiles are the same.
 pub fn add_to(script: &mut Script, sketch: &Sketch) {
-    script.add("sketch.create", json!({"plane": {"origin": sketch.origin, "x_dir": sketch.x_dir, "y_dir": sketch.y_dir}, "name": sketch.name}));
+    script.add(
+        "sketch.create",
+        json!({"plane": {"origin": sketch.origin, "x_dir": sketch.x_dir, "y_dir": sketch.y_dir}, "name": sketch.name}),
+    );
     for c in &sketch.curves {
         match c {
             Curve::Line { a, b, construction } => {

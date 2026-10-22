@@ -76,6 +76,20 @@ impl Document {
 
 type Docs = IndexMap<String, Document>;
 
+/// A component's name without the document version Fusion appends to it ("LTC 10Kg Tool v1"):
+/// the component that stands for another document of a .f3z carries the version it links to,
+/// while that document's own root carries its saved one ("LTC 10Kg Tool v0").
+fn unversioned(name: &str) -> &str {
+    let trimmed = name.trim_end();
+    if let Some((base, v)) = trimmed.rsplit_once(" v")
+        && !v.is_empty()
+        && v.bytes().all(|b| b.is_ascii_digit())
+    {
+        return base;
+    }
+    trimmed
+}
+
 fn load(src: &Path) -> Result<(String, Docs)> {
     let mut docs: Docs = IndexMap::new();
     let root_key = if util::suffix_lower(src) == ".f3z" {
@@ -106,8 +120,8 @@ fn load(src: &Path) -> Result<(String, Docs)> {
     };
     let mut by_root: HashMap<String, String> = HashMap::new();
     for d in docs.values() {
-        if let Some(r) = d.root_name.as_ref().filter(|r| !r.is_empty()) {
-            by_root.insert(r.clone(), d.key.clone());
+        if let Some(r) = d.root_name.as_deref().map(unversioned).filter(|r| !r.is_empty()) {
+            by_root.insert(r.to_owned(), d.key.clone());
         }
     }
     let keys: Vec<String> = docs.keys().cloned().collect();
@@ -115,7 +129,7 @@ fn load(src: &Path) -> Result<(String, Docs)> {
         let d = &docs[&k];
         let mut xrefs = HashMap::new();
         for (cid, c) in &d.asm.components {
-            if let Some(other) = by_root.get(&c.name)
+            if let Some(other) = by_root.get(unversioned(&c.name))
                 && Some(*cid) != d.asm.root
                 && *other != d.key
             {
@@ -243,10 +257,8 @@ fn assign(doc: &Document, step: &StepFile, wanted: &HashSet<u64>) -> Result<Assi
         return Ok((out, names));
     }
     // cadmpeg left some body out: each solid to the cached box that holds it best
-    let slots: Vec<(u64, super::f3d::Box3, Option<&String>)> = order
-        .iter()
-        .filter_map(|(cid, b)| b.bbox.filter(|_| wanted.contains(cid)).map(|bx| (*cid, bx, b.name.as_ref())))
-        .collect();
+    let slots: Vec<(u64, super::f3d::Box3, Option<&String>)> =
+        order.iter().filter_map(|(cid, b)| b.bbox.filter(|_| wanted.contains(cid)).map(|bx| (*cid, bx, b.name.as_ref()))).collect();
     let pmax = |a: f64, b: f64| if b > a { b } else { a };
     let mut pairs: Vec<(f64, i64, usize)> = Vec::new();
     for s in &items {
@@ -289,8 +301,9 @@ fn step_string(s: &str) -> String {
     out
 }
 
-static SOLID_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^#(\d+)(\s*=\s*(?:MANIFOLD_SOLID_BREP|BREP_WITH_VOIDS)\s*\(\s*)'(?:[^']|'')*'").expect("solid pattern"));
+static SOLID_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^#(\d+)(\s*=\s*(?:MANIFOLD_SOLID_BREP|BREP_WITH_VOIDS)\s*\(\s*)'(?:[^']|'')*'").expect("solid pattern")
+});
 
 /// Give the solids the names Fusion shows for their bodies (SolidCraft names bodies after them).
 fn name_solids(text: &str, names: &HashMap<i64, String>) -> String {
@@ -589,5 +602,15 @@ mod tests {
             name_solids(text, &names),
             "#5 = MANIFOLD_SOLID_BREP('T\\X2\\00ED\\X0\\tulo d''A',#4);\n#9 = BREP_WITH_VOIDS('Cuerpo2',#8,(#7));\n#12 = MANIFOLD_SOLID_BREP('',#11);\n"
         );
+    }
+
+    #[test]
+    fn document_versions_do_not_count_in_names() {
+        assert_eq!(unversioned("LTC 10Kg Tool v1"), "LTC 10Kg Tool");
+        assert_eq!(unversioned("LTC 10Kg Tool v0"), "LTC 10Kg Tool");
+        assert_eq!(unversioned("LTC 10Kg v12"), "LTC 10Kg");
+        assert_eq!(unversioned("Tapa v2b"), "Tapa v2b");
+        assert_eq!(unversioned("Servo v"), "Servo v");
+        assert_eq!(unversioned("LINK4-CR5A"), "LINK4-CR5A");
     }
 }
